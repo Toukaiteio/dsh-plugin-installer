@@ -9,6 +9,7 @@ interface Profile {
   readonly name: string
   readonly webCapable: boolean
   readonly installedRepositories: readonly string[]
+  readonly installedPlugins: readonly InstalledPlugin[]
 }
 
 interface StateSnapshot {
@@ -42,6 +43,17 @@ interface InstallResult {
   readonly restartAvailable: boolean
 }
 
+interface InstalledPlugin {
+  readonly packageName: string
+  readonly repository: string
+  readonly owner: string
+  readonly repositoryName: string
+  readonly installedVersion: string | null
+  readonly updateStatus: 'available' | 'up-to-date' | 'unknown'
+}
+
+interface PluginActionResult { readonly restartAvailable: boolean }
+
 interface ApiError { readonly error?: { readonly message?: string } }
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
@@ -74,9 +86,9 @@ export function PluginMarketplaceSettingsTab({ t }: SettingsProps): ReactNode {
   const [restartAvailable, setRestartAvailable] = useState(false)
   const [newProfile, setNewProfile] = useState('')
 
-  const load = async (search = query): Promise<void> => {
+  const load = async (search = query, preserveMessage = false): Promise<void> => {
     setLoading(true)
-    setMessage(null)
+    if (!preserveMessage) setMessage(null)
     try {
       const [state, catalog] = await Promise.all([
         api<StateSnapshot>('/state'),
@@ -96,7 +108,6 @@ export function PluginMarketplaceSettingsTab({ t }: SettingsProps): ReactNode {
 
   const profiles = snapshot?.profiles ?? []
   const selectedSummary = profiles.find(profile => profile.name === selectedProfile)
-  const locale = navigator.language
   const visiblePlugins = useMemo(() => plugins, [plugins])
 
   const inspect = async (repository: Repository): Promise<void> => {
@@ -119,15 +130,16 @@ export function PluginMarketplaceSettingsTab({ t }: SettingsProps): ReactNode {
     if (candidate === null || !candidate.validBundle) return
     setWorking(true)
     setMessage(null)
+    setRestartAvailable(false)
     try {
       const result = await api<InstallResult>('/install', {
         method: 'POST',
         body: JSON.stringify({ profile: selectedProfile, owner: candidate.repository.owner, repository: candidate.repository.name, allowBuild }),
       })
+      await load(query, true)
       setMessage({ kind: 'success', text: t('installed') })
       setRestartAvailable(result.restartAvailable)
       setCandidate(null)
-      await load(query)
     } catch (error) {
       setMessage({ kind: 'error', text: error instanceof Error ? error.message : t('installFailed') })
     } finally {
@@ -173,6 +185,45 @@ export function PluginMarketplaceSettingsTab({ t }: SettingsProps): ReactNode {
     }
   }
 
+  const updatePlugin = async (plugin: InstalledPlugin): Promise<void> => {
+    setWorking(true)
+    setMessage(null)
+    setRestartAvailable(false)
+    try {
+      const result = await api<PluginActionResult>('/update', {
+        method: 'POST',
+        body: JSON.stringify({ profile: selectedProfile, packageName: plugin.packageName, owner: plugin.owner, repository: plugin.repositoryName }),
+      })
+      await load(query, true)
+      setMessage({ kind: 'success', text: t('updatedPlugin') })
+      setRestartAvailable(result.restartAvailable)
+    } catch (error) {
+      setMessage({ kind: 'error', text: error instanceof Error ? error.message : t('updateFailed') })
+    } finally {
+      setWorking(false)
+    }
+  }
+
+  const removePlugin = async (plugin: InstalledPlugin): Promise<void> => {
+    if (!window.confirm(`${t('removeConfirm')}\n\n${plugin.packageName}`)) return
+    setWorking(true)
+    setMessage(null)
+    setRestartAvailable(false)
+    try {
+      const result = await api<PluginActionResult>('/remove', {
+        method: 'POST',
+        body: JSON.stringify({ profile: selectedProfile, packageName: plugin.packageName }),
+      })
+      await load(query, true)
+      setMessage({ kind: 'success', text: t('removedPlugin') })
+      setRestartAvailable(result.restartAvailable)
+    } catch (error) {
+      setMessage({ kind: 'error', text: error instanceof Error ? error.message : t('removeFailed') })
+    } finally {
+      setWorking(false)
+    }
+  }
+
   const isInstalled = (repository: Repository): boolean => {
     if (selectedSummary === undefined) return false
     const fullName = repository.fullName.toLocaleLowerCase()
@@ -208,6 +259,31 @@ export function PluginMarketplaceSettingsTab({ t }: SettingsProps): ReactNode {
           : <p className={css.status}>{t('restartUnavailable')}</p>
       ) : null}
       {loading ? <p className={css.status}>{t('loading')}</p> : null}
+
+      {selectedSummary !== undefined && selectedSummary.installedPlugins.length > 0 ? (
+        <section className={css.installed} aria-label={t('installedPlugins')}>
+          <div className={css.sectionHeading}>
+            <h2>{t('installedPlugins')}</h2>
+            <p>{t('installedPluginsHint')}</p>
+          </div>
+          <ul className={css.rows}>
+            {selectedSummary.installedPlugins.map(plugin => (
+              <li key={plugin.packageName} className={css.row}>
+                <div className={css.rowMain}>
+                  <a href={`https://github.com/${plugin.repository}`} target="_blank" rel="noreferrer" className={css.repository}>{plugin.repository}</a>
+                  <span>{plugin.installedVersion === null ? plugin.packageName : `${plugin.packageName} · v${plugin.installedVersion}`}</span>
+                </div>
+                <div className={css.rowActions}>
+                  {plugin.updateStatus === 'available'
+                    ? <button type="button" className={css.primaryButton} disabled={working} onClick={() => void updatePlugin(plugin)}>{working ? t('updating') : t('update')}</button>
+                    : <span className={css.installedTag}>{plugin.updateStatus === 'up-to-date' ? t('upToDate') : t('updateUnknown')}</span>}
+                  <button type="button" className={css.secondaryButton} disabled={working} onClick={() => void removePlugin(plugin)}>{working ? t('removing') : t('remove')}</button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
 
       {candidate !== null ? (
         <section className={css.review} aria-live="polite">
@@ -245,7 +321,7 @@ export function PluginMarketplaceSettingsTab({ t }: SettingsProps): ReactNode {
                 <div className={css.rowMain}>
                   <a href={plugin.url} target="_blank" rel="noreferrer" className={css.repository}>{plugin.fullName}</a>
                   <p>{plugin.description ?? t('noDescription')}</p>
-                  <span>{t('stars')} {plugin.stars} · {t('updated')} {updated(plugin.updatedAt, locale)}{plugin.language === null ? '' : ` · ${plugin.language}`}</span>
+                  <span>{t('stars')} {plugin.stars} · {t('updated')} {updated(plugin.updatedAt, t('dateLocale'))}{plugin.language === null ? '' : ` · ${plugin.language}`}</span>
                 </div>
                 {isInstalled(plugin)
                   ? <span className={css.installedTag}>{t('installedPlugin')}</span>

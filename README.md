@@ -1,56 +1,150 @@
 # DSH Plugin Installer
 
-将 GitHub 上的 DeepSeek Harness 插件发现、校验、安装和 Profile 切换整合进官方 Web UI 的 **设置 → 插件 → 插件市场** 标签页。
+[![CI](https://github.com/Toukaiteio/dsh-plugin-installer/actions/workflows/ci.yml/badge.svg)](https://github.com/Toukaiteio/dsh-plugin-installer/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/Toukaiteio/dsh-plugin-installer?display_name=tag)](https://github.com/Toukaiteio/dsh-plugin-installer/releases)
+[![License](https://img.shields.io/github/license/Toukaiteio/dsh-plugin-installer)](LICENSE)
 
-界面刻意保持单页、少控件：一个 Profile 工具条、一个搜索框、一列仓库，以及只在点击安装时展开的校验面板。它沿用官方设置页的布局和设计令牌，不使用 emoji、渐变或独立管理后台。
+English | [简体中文](README.zh-CN.md)
 
-## 功能
+An in-app marketplace and Profile switcher for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness).
 
-- 在线合并 GitHub 的 `dsh-plugin` 与 `dsh` Topics；搜索结果在服务端缓存五分钟，降低匿名 GitHub Search API 的频率限制影响。
-- 点击安装前读取仓库根目录 `package.json`。只有声明 `dsh.bundle.patch` 的包才会显示安装操作。
-- 将默认分支解析成固定 commit，再用 `dsh plugin --profile <profile> add github:owner/repo#commit` 安装，避免之后默认分支变动导致配置漂移。
-- 有 `prepare` 安装脚本的仓库必须在 UI 显式勾选授权；确认后才为该包写入目标 Profile 的 `allowBuilds`。
-- 列出本机 `$DSH_HOME/profiles` 下的 Profile；可启动已有 Web Profile，或一键创建含官方 Web UI 和本插件的新 Profile。
+DSH Plugin Installer adds a **Plugin marketplace** tab to the official Web UI under **Settings → Plugins**. It discovers repositories from the GitHub `dsh-plugin` and `dsh` topics, verifies that a repository is a real DSH bundle, installs it at a pinned commit, and helps users open another Web Profile without leaving the UI.
 
-## 安装与开发
+The project intentionally keeps the interface compact and newcomer-friendly. It uses the official Web UI slot and design-token system, with no separate administration page, emoji, or gradient backgrounds.
 
-先构建并生成可发布文件：
+## Features
+
+- Online discovery from GitHub `dsh-plugin` and `dsh` topics.
+- Root `package.json` validation for `dsh.bundle.patch` before installation.
+- Commit-pinned GitHub installs using `github:owner/repository#commit`.
+- Explicit confirmation before enabling a third-party `prepare` install script.
+- Installation into a selected DSH Profile.
+- Installed-state detection from both GitHub dependency specs and package repository metadata.
+- Automatic update checks for GitHub plugins installed at pinned commits, plus in-page update and removal actions.
+- Interface copy and date formatting that follow the official DSH language preference.
+- Web Profile list, fast Profile opening, and Web Profile creation.
+- Restart guidance and a one-click restart action after installing into the active Profile.
+- Five-minute server-side search caching to reduce GitHub API pressure.
+
+## Requirements
+
+- Node.js `>=22.19.0`
+- pnpm `>=10`
+- DeepSeek Harness `0.1.0-rc.6` or a compatible release
+- A running DSH Web Profile for the in-app UI
+
+## Install
+
+Build or download the package archive from the [latest GitHub Release](https://github.com/Toukaiteio/dsh-plugin-installer/releases), then add it to the Web Profile you use:
+
+```bash
+dsh plugin --profile web add ./dsh-plugin-installer-0.1.2.tgz
+dsh web
+```
+
+To install directly from a GitHub revision after the repository has been published:
+
+```bash
+dsh plugin --profile web add github:Toukaiteio/dsh-plugin-installer#<commit>
+dsh web
+```
+
+Open **Settings → Plugins → Plugin marketplace** after the Web UI starts.
+
+## How it works
+
+The marketplace treats a GitHub topic as a discovery hint, not as a trust decision. When a user chooses **Install**, the host side:
+
+1. Reads the repository metadata and its default branch.
+2. Fetches the root `package.json`.
+3. Requires a valid `dsh.bundle.patch` declaration.
+4. Resolves the branch to a full commit SHA.
+5. Runs DSH's own plugin command with the pinned GitHub spec.
+
+Repositories with a `prepare` script are blocked until the user explicitly grants build permission. This is intentional: package installation may execute third-party code.
+
+## Installed plugin management
+
+The marketplace follows the language selected in DSH **Settings → General → Language**. It also formats repository dates in that language.
+
+The **Installed plugins** section is scoped to the selected Profile. On page load, it compares every plugin installed from a pinned GitHub commit with the repository's latest default-branch commit:
+
+- **Update available** installs the current verified bundle at a newly pinned commit.
+- **Up to date** means the installed commit still matches the latest default-branch commit.
+- **Update status unavailable** is shown for registry/local installs or when GitHub cannot be reached; it never claims an update without a successful comparison.
+- **Remove** asks for confirmation, then uses DSH's own `plugin remove` command so the Profile bundle list is reconciled with the package state.
+
+After updating or removing a plugin from the active Web Profile, use **Restart DSH now** to apply the new bundle stack.
+
+## Profile behavior
+
+The Profile controls are designed around DSH's local Web process model:
+
+- **Open Profile** starts the selected Web Profile on a new local port and navigates the browser to it. The current process is left running so a failed switch does not destroy the current session.
+- **Create and open** initializes a new Profile with the official Web bundle and this installer, then opens it.
+- After installing into the active Web Profile, **Restart DSH now** starts the replacement process first, navigates to its ready URL, and then disposes the old process.
+
+The current DSH preview release has an upstream packaging issue: the npm `@deepseek-ai/dsh-web-app` package may reference `@deepseek-ai/dsh-frontend`, which can be unavailable from the npm registry. When that happens, creating a completely new Web Profile is blocked by the upstream package; existing working Web Profiles are unaffected.
+
+## Development
 
 ```bash
 pnpm install
+pnpm check
 pnpm build
 pnpm pack
 ```
 
-将生成的 `.tgz` 添加到默认 Web Profile：
+Individual commands:
 
 ```bash
-dsh plugin --profile web add ./dsh-plugin-installer-0.1.1.tgz
-dsh web
+pnpm typecheck
+pnpm test
+pnpm test:integration
+pnpm build
 ```
 
-开发时也可从发布到 GitHub 的仓库安装。Git 安装不会替你生成构建产物，因此提交中必须包含 `lib/`，并且不要依赖 `prepare` 来构建本插件。
+The package commits its `lib/` output because DSH can install a plugin directly from a Git repository without running a build step first. Local `.tgz` archives, dependencies, caches, and environment files are excluded by [.gitignore](.gitignore).
 
-## Profile 行为
+## Plugin and Skill authoring
 
-“打开 Profile”不会终止当前 DSH Web 进程。它会为目标 Profile 启动一个新的本地端口，确认启动地址后跳转浏览器。这样切换失败不会让用户丢失当前会话；不再需要的旧进程可由用户自行关闭。
+This repository includes [SKILL.md](SKILL.md), a practical workflow skill for using the marketplace and authoring a compatible DSH bundle.
 
-新建 Profile 会依次安装 `@deepseek-ai/dsh-web-app` 和当前插件使用的同一安装来源，因此新页面仍然有插件市场。
+A minimal DSH plugin bundle needs:
 
-> 当前上游预览版注意事项：测试时，npm 上的 `@deepseek-ai/dsh-web-app` 依赖的 `@deepseek-ai/dsh-frontend` 返回 404，因而在完全空白的环境中创建 Web Profile 会被这一上游发布问题阻断。已有可运行的 Web Profile 不受影响；待上游修复该包后，“新建 Web Profile”无需改动即可恢复。
+1. A root `package.json` with `dsh.bundle.patch`.
+2. A `cordis.patch.yml` that inserts the host module.
+3. An ESM host module exporting `apply(ctx)`.
+4. An optional `dsh.client` declaration and `./client` export for Web UI code.
 
-## 编写 DSH skill 与 plugin
+For a native DSH Skill, create a `SKILL.md` with YAML frontmatter and place it in a directory discovered by DSH, such as `$DSH_HOME/skills/<skill-name>/SKILL.md`. A Skill describes instructions and workflow; a Plugin changes the Harness runtime or UI.
 
-这个项目的 [SKILL.md](SKILL.md) 是随插件发布的操作 skill 范例。DSH 的原生 skill 是一个带 YAML frontmatter 的 `SKILL.md`，放在 DSH 可发现的 skills 目录中；它描述工作流和安全边界，不负责加载 Node 代码。若希望它被 agent 自动发现，请复制为 `$DSH_HOME/skills/dsh-plugin-marketplace/SKILL.md`。
+## Security
 
-真正改变 Harness 行为或 Web UI 的扩展是 plugin bundle。最小 bundle 要有：
+GitHub topics are not a security review or an endorsement. The installer validates the bundle shape and pins the selected commit, but it cannot audit third-party source code. Review a repository before installing it, especially when it requests an install or build script.
 
-1. 根 `package.json` 的 `dsh.bundle.patch`。
-2. `cordis.patch.yml` 中插入的模块行。
-3. 导出 `apply(ctx)` 的 ESM host 模块；如需 Web UI，再用 `dsh.client` 与 `./client` 导出 browser 模块。
+The GitHub API token is read only from the server-side `GITHUB_TOKEN` environment variable when present; it is never sent to the browser.
 
-本项目是完整的 Web plugin 样例：host 模块注册本地 API，client 模块通过 `settings.plugins.tab` 注入现有的官方插件设置页，不另起页面。
+## Automated builds and releases
 
-## 安全边界
+GitHub Actions runs the full verification suite on pushes to `main` and on pull requests. It also uploads the generated `.tgz` as a short-lived CI artifact.
 
-GitHub Topic 只是发现信号，不代表官方审核或安全背书。市场会验证 bundle 形状和固定安装提交，但不能审计第三方代码。对包含安装脚本的仓库，必须先查看仓库内容并得到用户确认。
+Pushing a matching version tag creates a GitHub Release and attaches the package archive:
+
+```bash
+git tag v0.1.2
+git push origin v0.1.2
+```
+
+The release workflow rejects a tag when its version does not match `package.json`.
+
+## License
+
+[MIT](LICENSE)
+
+## Links
+
+- [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)
+- [DSH plugin topic](https://github.com/topics/dsh-plugin)
+- [DSH release documentation](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/user/develop/basic/publish.md)
+- [中文文档](README.zh-CN.md)

@@ -11,8 +11,8 @@ const root = mkdtempSync(join(tmpdir(), 'dsh-plugin-installer-route-'))
 const profile = join(root, 'profiles', 'web')
 const installedPlugin = join(profile, 'node_modules', 'example-plugin')
 mkdirSync(installedPlugin, { recursive: true })
-writeFileSync(join(profile, 'package.json'), JSON.stringify({ dependencies: { 'example-plugin': '^1.0.0' }, dsh: { profile: { bundles: ['@deepseek-ai/dsh-web-app'] } } }))
-writeFileSync(join(installedPlugin, 'package.json'), JSON.stringify({ repository: 'https://github.com/example/example-plugin.git' }))
+writeFileSync(join(profile, 'package.json'), JSON.stringify({ dependencies: { 'example-plugin': 'github:example/example-plugin#0123456789abcdef' }, dsh: { profile: { bundles: ['@deepseek-ai/dsh-web-app', 'example-plugin'] } } }))
+writeFileSync(join(installedPlugin, 'package.json'), JSON.stringify({ version: '1.0.0', repository: 'https://github.com/example/example-plugin.git', dsh: { bundle: { patch: './cordis.patch.yml' } } }))
 
 const previousHome = process.env.DSH_HOME
 process.env.DSH_HOME = root
@@ -39,6 +39,8 @@ try {
   const summary = state.profiles.find(profileSummary => profileSummary.name === 'web')
   if (summary === undefined) throw new Error('Profile list did not include web')
   if (!summary.installedRepositories.includes('example/example-plugin')) throw new Error('Installed GitHub repository was not discovered')
+  const plugin = summary.installedPlugins.find(installed => installed.packageName === 'example-plugin')
+  if (plugin?.updateStatus !== 'unknown') throw new Error('A failed remote check should not report a false update status')
   console.log('host route integration passed')
 } finally {
   await ctx.fiber.dispose()

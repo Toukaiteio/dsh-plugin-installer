@@ -9,6 +9,7 @@ import type {} from '@deepseek-ai/dsh-host-webserver'
 import { parseDocument } from 'yaml'
 import {
   type GitHubRepository,
+  type InstalledPlugin,
   type PluginCandidate,
   type ProfileSummary,
   UserFacingError,
@@ -34,7 +35,9 @@ interface ProfilePackage {
 }
 
 interface InstalledPackageManifest {
+  version?: unknown
   repository?: unknown
+  dsh?: { bundle?: { patch?: unknown } }
 }
 
 interface GitHubRepoResponse {
@@ -68,6 +71,7 @@ class MarketplaceRuntime {
   private readonly profilesRoot: string
   private readonly currentProfile: string
   private readonly searchCache = new Map<string, { expiresAt: number; value: GitHubRepository[] }>()
+  private readonly updateCache = new Map<string, { expiresAt: number; value: Promise<string | null> }>()
 
   constructor(private readonly ctx: Context) {
     this.profilesRoot = join(this.resolveDshHome(), 'profiles')
@@ -79,7 +83,7 @@ class MarketplaceRuntime {
       const url = new URL(request.url ?? '/', 'http://127.0.0.1')
       if (!url.pathname.startsWith(API_PREFIX)) throw new UserFacingError('not-found', '未找到请求的接口。', 404)
       const tail = url.pathname.slice(API_PREFIX.length) || '/'
-      if (request.method === 'GET' && tail === '/state') return this.json(response, 200, this.state())
+      if (request.method === 'GET' && tail === '/state') return this.json(response, 200, await this.state())
       if (request.method === 'GET' && tail === '/plugins') {
         return this.json(response, 200, { plugins: await this.search(url.searchParams.get('query') ?? '') })
       }
@@ -91,6 +95,8 @@ class MarketplaceRuntime {
       }
       const body = request.method === 'POST' ? await readJson(request) : undefined
       if (request.method === 'POST' && tail === '/install') return this.json(response, 200, await this.install(body))
+      if (request.method === 'POST' && tail === '/update') return this.json(response, 200, await this.update(body))
+      if (request.method === 'POST' && tail === '/remove') return this.json(response, 200, await this.remove(body))
       if (request.method === 'POST' && tail === '/switch') return this.json(response, 200, await this.switchProfile(body))
       if (request.method === 'POST' && tail === '/restart') return this.json(response, 200, await this.restartCurrentProfile(body))
       if (request.method === 'POST' && tail === '/profiles') return this.json(response, 201, await this.createProfile(body))
@@ -102,13 +108,13 @@ class MarketplaceRuntime {
     }
   }
 
-  private state(): { currentProfile: string; profiles: ProfileSummary[] } {
-    return { currentProfile: this.currentProfile, profiles: this.listProfiles() }
+  private async state(): Promise<{ currentProfile: string; profiles: ProfileSummary[] }> {
+    return { currentProfile: this.currentProfile, profiles: await this.listProfiles() }
   }
 
-  private listProfiles(): ProfileSummary[] {
+  private async listProfiles(): Promise<ProfileSummary[]> {
     if (!existsSync(this.profilesRoot)) return []
-    return readdirSync(this.profilesRoot, { withFileTypes: true })
+    const profiles = readdirSync(this.profilesRoot, { withFileTypes: true })
       .filter(entry => entry.isDirectory() && isProfileName(entry.name))
       .flatMap((entry): ProfileSummary[] => {
         const manifest = this.readProfile(entry.name)
@@ -127,10 +133,14 @@ class MarketplaceRuntime {
           name: entry.name,
           bundles,
           installedRepositories: [...new Set(installedRepositories)],
+          installedPlugins: this.installedPlugins(entry.name, manifest, bundles),
           webCapable: bundles.includes('@deepseek-ai/dsh-web-app'),
         }]
       })
-      .sort((a, b) => a.name.localeCompare(b.name))
+    return await Promise.all(profiles.map(async profile => ({
+      ...profile,
+      installedPlugins: await Promise.all(profile.installedPlugins.map(plugin => this.checkForUpdate(plugin))),
+    }))).then(value => value.sort((a, b) => a.name.localeCompare(b.name)))
   }
 
   private async search(query: string): Promise<GitHubRepository[]> {
@@ -193,6 +203,39 @@ class MarketplaceRuntime {
     if (candidate.requiresBuildApproval && candidate.packageName !== null) this.allowBuild(profile, candidate.packageName)
     const result = await this.runDsh(['plugin', '--profile', profile, 'add', candidate.installSpec])
     return { installed: candidate, output: result.output, restartAvailable: profile === this.currentProfile && this.profileSupportsWeb(profile) }
+  }
+
+  private async update(body: unknown): Promise<{ updated: PluginCandidate; output: string; restartAvailable: boolean }> {
+    const input = object(body)
+    const profile = input.profile
+    const packageName = input.packageName
+    const owner = input.owner
+    const repository = input.repository
+    if (!isProfileName(profile) || !this.profileExists(profile)) throw new UserFacingError('unknown-profile', '请选择一个已有 Profile。')
+    if (typeof packageName !== 'string' || !isPackageName(packageName)) throw new UserFacingError('invalid-plugin', '插件名称不合法。')
+    if (typeof owner !== 'string' || typeof repository !== 'string' || !isRepositorySegment(owner) || !isRepositorySegment(repository)) throw new UserFacingError('invalid-repository', 'GitHub 仓库地址不合法。')
+    const installed = this.findInstalledPlugin(profile, packageName)
+    if (installed === null || installed.repository !== `${owner}/${repository}`.toLocaleLowerCase()) {
+      throw new UserFacingError('unknown-plugin', '该插件不属于所选 Profile。', 404)
+    }
+    const candidate = await this.inspect(owner, repository)
+    if (!candidate.validBundle || candidate.installSpec === null || candidate.packageName !== packageName) {
+      throw new UserFacingError('not-a-bundle', '仓库当前版本不再是同名的 DSH bundle，无法更新。')
+    }
+    const result = await this.runDsh(['plugin', '--profile', profile, 'add', candidate.installSpec])
+    return { updated: candidate, output: result.output, restartAvailable: profile === this.currentProfile && this.profileSupportsWeb(profile) }
+  }
+
+  private async remove(body: unknown): Promise<{ removed: string; output: string; restartAvailable: boolean }> {
+    const input = object(body)
+    const profile = input.profile
+    const packageName = input.packageName
+    if (!isProfileName(profile) || !this.profileExists(profile)) throw new UserFacingError('unknown-profile', '请选择一个已有 Profile。')
+    if (typeof packageName !== 'string' || !isPackageName(packageName) || this.findInstalledPlugin(profile, packageName) === null) {
+      throw new UserFacingError('unknown-plugin', '该插件不属于所选 Profile。', 404)
+    }
+    const result = await this.runDsh(['plugin', '--profile', profile, 'remove', packageName])
+    return { removed: packageName, output: result.output, restartAvailable: profile === this.currentProfile && this.profileSupportsWeb(profile) }
   }
 
   private async switchProfile(body: unknown): Promise<{ url: string }> {
@@ -279,7 +322,7 @@ class MarketplaceRuntime {
       child.once('error', error => reject(new UserFacingError('command-failed', error.message, 500)))
       child.once('exit', code => code === 0
         ? resolvePromise({ output })
-        : reject(new UserFacingError('command-failed', `DSH 安装失败：${output || `退出码 ${code ?? 'unknown'}`}`, 500)))
+        : reject(new UserFacingError('command-failed', `DSH 插件操作失败：${output || `退出码 ${code ?? 'unknown'}`}`, 500)))
     })
   }
 
@@ -340,11 +383,66 @@ class MarketplaceRuntime {
   }
 
   private repositoryFromInstalledPackage(profile: string, packageName: string): string | null {
+    const manifest = this.readInstalledPackage(profile, packageName)
+    return manifest === null ? null : githubRepositoryFromMetadata(manifest.repository)
+  }
+
+  private installedPlugins(profile: string, manifest: ProfilePackage, bundles: readonly string[]): InstalledPlugin[] {
+    return Object.entries(manifest.dependencies ?? {}).flatMap(([packageName, specifier]) => {
+      if (!isPackageName(packageName) || packageName.startsWith('@deepseek-ai/') || packageName === SELF_MANIFEST.name) return []
+      const installed = this.readInstalledPackage(profile, packageName)
+      const repository = githubRepositoryFromSpecifier(specifier) ?? githubRepositoryFromMetadata(installed?.repository)
+      if (repository === null || (!bundles.includes(packageName) && !isBundleManifest(installed))) return []
+      const [owner, repositoryName] = repository.split('/')
+      if (owner === undefined || repositoryName === undefined) return []
+      const plugin: InstalledPlugin = {
+        packageName,
+        repository,
+        owner,
+        repositoryName,
+        installedVersion: typeof installed?.version === 'string' ? installed.version : null,
+        installedCommit: githubCommitFromSpecifier(specifier),
+        updateStatus: 'unknown',
+      }
+      return [plugin]
+    }).sort((a, b) => a.repository.localeCompare(b.repository))
+  }
+
+  private findInstalledPlugin(profile: string, packageName: string): InstalledPlugin | null {
+    const manifest = this.readProfile(profile)
+    if (manifest === null) return null
+    const bundles = Array.isArray(manifest.dsh?.profile?.bundles)
+      ? manifest.dsh.profile.bundles.filter((item): item is string => typeof item === 'string')
+      : []
+    return this.installedPlugins(profile, manifest, bundles).find(plugin => plugin.packageName === packageName) ?? null
+  }
+
+  private async checkForUpdate(plugin: InstalledPlugin): Promise<InstalledPlugin> {
+    if (plugin.installedCommit === null) return plugin
+    const latestCommit = await this.latestCommit(plugin.owner, plugin.repositoryName)
+    if (latestCommit === null) return plugin
+    return {
+      ...plugin,
+      updateStatus: sameCommit(plugin.installedCommit, latestCommit) ? 'up-to-date' : 'available',
+    }
+  }
+
+  private async latestCommit(owner: string, repository: string): Promise<string | null> {
+    const key = `${owner}/${repository}`.toLocaleLowerCase()
+    const cached = this.updateCache.get(key)
+    if (cached !== undefined && cached.expiresAt > Date.now()) return await cached.value
+    const value = this.githubJson<Array<{ sha?: unknown }>>(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repository)}/commits?per_page=1`)
+      .then(commits => typeof commits[0]?.sha === 'string' && /^[0-9a-f]{7,64}$/i.test(commits[0].sha) ? commits[0].sha : null)
+      .catch(() => null)
+    this.updateCache.set(key, { value, expiresAt: Date.now() + 5 * 60_000 })
+    return await value
+  }
+
+  private readInstalledPackage(profile: string, packageName: string): InstalledPackageManifest | null {
     if (!isPackageName(packageName)) return null
     try {
       const manifestPath = join(this.profilesRoot, profile, 'node_modules', ...packageName.split('/'), 'package.json')
-      const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as InstalledPackageManifest
-      return githubRepositoryFromMetadata(manifest.repository)
+      return JSON.parse(readFileSync(manifestPath, 'utf8')) as InstalledPackageManifest
     } catch {
       return null
     }
@@ -369,6 +467,16 @@ function githubRepositoryFromSpecifier(specifier: string): string | null {
   return `${owner}/${repository}`.toLocaleLowerCase()
 }
 
+function githubCommitFromSpecifier(specifier: string): string | null {
+  const match = /^github:[^/]+\/[^#]+#([0-9a-f]{7,64})$/i.exec(specifier)
+  return match?.[1] ?? null
+}
+
+function sameCommit(left: string, right: string): boolean {
+  return left.toLocaleLowerCase() === right.toLocaleLowerCase()
+    || left.length < right.length && right.toLocaleLowerCase().startsWith(left.toLocaleLowerCase())
+}
+
 function isPackageName(value: string): boolean {
   return /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/i.test(value)
 }
@@ -385,6 +493,11 @@ function githubRepositoryFromMetadata(value: unknown): string | null {
   const [, owner, repository] = match
   if (!isRepositorySegment(owner) || !isRepositorySegment(repository)) return null
   return `${owner}/${repository}`.toLocaleLowerCase()
+}
+
+function isBundleManifest(value: InstalledPackageManifest | null): boolean {
+  const patch = value?.dsh?.bundle?.patch
+  return typeof patch === 'string' && patch.length > 0
 }
 
 function object(value: unknown): Record<string, unknown> {

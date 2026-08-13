@@ -1,7 +1,23 @@
 {
   "name": "dsh-plugin-installer",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "A Web UI marketplace and profile switcher for DeepSeek Harness plugins.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Toukaiteio/dsh-plugin-installer.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Toukaiteio/dsh-plugin-installer/issues"
+  },
+  "homepage": "https://github.com/Toukaiteio/dsh-plugin-installer#readme",
+  "keywords": [
+    "deepseek",
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "plugin-marketplace"
+  ],
+  "packageManager": "pnpm@10.14.0",
   "type": "module",
   "main": "./lib/index.js",
   "types": "./lib/types/index.d.ts",
@@ -21,6 +37,7 @@
     "lib",
     "cordis.patch.yml",
     "README.md",
+    "README.zh-CN.md",
     "SKILL.md",
     "LICENSE"
   ],
@@ -29,6 +46,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:integration": "node tests/host-route.integration.mjs",
+    "check": "pnpm typecheck && pnpm test && pnpm build && pnpm test:integration",
     "pack": "pnpm pack"
   },
   "dsh": {

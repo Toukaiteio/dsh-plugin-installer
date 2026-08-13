@@ -24,6 +24,7 @@
 .profileBar,
 .search,
 .reviewActions,
+.rowActions,
 .row,
 .reviewHeading {
   display: flex;
@@ -191,10 +192,14 @@
 .reviewActions { flex-wrap: wrap; }
 .reviewActions a { color: var(--dsw-alias-label-secondary); font-size: 13px; line-height: 20px; }
 
-.catalog { display: flex; flex-direction: column; gap: 10px; }
+.catalog,
+.installed { display: flex; flex-direction: column; gap: 10px; }
+.sectionHeading h2 { margin: 0; color: var(--dsw-alias-label-primary); font-size: 14px; font-weight: 600; line-height: 20px; }
+.sectionHeading p { margin: 3px 0 0; color: var(--dsw-alias-label-tertiary); font-size: 12px; line-height: 18px; }
 .rows { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--dsw-alias-border-l2); }
 .row { justify-content: space-between; align-items: flex-start; border-bottom: 1px solid var(--dsw-alias-border-l2); padding: 13px 2px; }
 .rowMain { min-width: 0; padding-right: 12px; }
+.rowActions { flex: none; align-items: center; }
 .repository { display: inline-block; overflow-wrap: anywhere; text-decoration: none; }
 .repository:hover { text-decoration: underline; }
 .row p { margin-top: 3px; color: var(--dsw-alias-label-secondary); font-size: 13px; line-height: 19px; }
@@ -214,5 +219,6 @@
   .profileBar { flex-wrap: wrap; }
   .newProfile { margin-left: 0; }
   .row { gap: 8px; }
+  .rowActions { flex-wrap: wrap; justify-content: flex-end; }
   .details { grid-template-columns: 1fr; }
 }

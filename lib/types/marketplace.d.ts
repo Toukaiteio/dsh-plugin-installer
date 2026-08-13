@@ -29,10 +29,22 @@ export interface PluginCandidate {
     readonly reason: string | null;
     readonly requiresBuildApproval: boolean;
 }
+export type PluginUpdateStatus = 'available' | 'up-to-date' | 'unknown';
+/** A direct, GitHub-backed DSH bundle installed in one Profile. */
+export interface InstalledPlugin {
+    readonly packageName: string;
+    readonly repository: string;
+    readonly owner: string;
+    readonly repositoryName: string;
+    readonly installedVersion: string | null;
+    readonly installedCommit: string | null;
+    readonly updateStatus: PluginUpdateStatus;
+}
 export interface ProfileSummary {
     readonly name: string;
     readonly bundles: readonly string[];
     readonly installedRepositories: readonly string[];
+    readonly installedPlugins: readonly InstalledPlugin[];
     readonly webCapable: boolean;
 }
 export declare class UserFacingError extends Error {
