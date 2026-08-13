@@ -64,7 +64,6 @@ trap cleanup EXIT
 
 temporary_directory="$(mktemp -d "${TMPDIR:-/tmp}/dsh-plugin-installer.XXXXXX")"
 release_json="$temporary_directory/release.json"
-archive_path="$temporary_directory/dsh-plugin-installer.tgz"
 
 printf 'Finding the latest DSH Plugin Installer release...\n'
 curl --fail --location --retry 3 --silent --show-error \
@@ -93,25 +92,37 @@ NODE
 release_tag="$(printf '%s' "$release_metadata" | node -e 'const { readFileSync } = require("node:fs"); process.stdout.write(JSON.parse(readFileSync(0, "utf8")).tag)')"
 download_url="$(printf '%s' "$release_metadata" | node -e 'const { readFileSync } = require("node:fs"); process.stdout.write(JSON.parse(readFileSync(0, "utf8")).url)')"
 asset_digest="$(printf '%s' "$release_metadata" | node -e 'const { readFileSync } = require("node:fs"); process.stdout.write(JSON.parse(readFileSync(0, "utf8")).digest)')"
+asset_name="$(printf '%s' "$release_metadata" | node -e 'const { readFileSync } = require("node:fs"); const value = JSON.parse(readFileSync(0, "utf8")); process.stdout.write(new URL(value.url).pathname.split("/").pop())')"
+
+dsh_home="${DSH_HOME:-$HOME/.dsh}"
+archive_directory="$dsh_home/plugin-archives/dsh-plugin-installer"
+archive_path="$archive_directory/$asset_name"
+download_path="$temporary_directory/$asset_name"
+mkdir -p "$archive_directory"
 
 printf 'Downloading %s...\n' "$release_tag"
 curl --fail --location --retry 3 --silent --show-error \
   -H 'User-Agent: dsh-plugin-installer-bootstrap' \
   "$download_url" \
-  -o "$archive_path"
+  -o "$download_path"
 
 if [[ "$asset_digest" =~ ^sha256:([[:xdigit:]]{64})$ ]]; then
   expected_hash="$(printf '%s' "${BASH_REMATCH[1]}" | tr '[:upper:]' '[:lower:]')"
   if command -v sha256sum >/dev/null 2>&1; then
-    actual_hash="$(sha256sum "$archive_path" | awk '{print $1}')"
+    actual_hash="$(sha256sum "$download_path" | awk '{print $1}')"
   elif command -v shasum >/dev/null 2>&1; then
-    actual_hash="$(shasum -a 256 "$archive_path" | awk '{print $1}')"
+    actual_hash="$(shasum -a 256 "$download_path" | awk '{print $1}')"
   else
     fail 'GitHub provided a SHA-256 checksum, but neither sha256sum nor shasum is available to verify it.'
   fi
   actual_hash="$(printf '%s' "$actual_hash" | tr '[:upper:]' '[:lower:]')"
   [[ "$actual_hash" == "$expected_hash" ]] || fail 'The downloaded package checksum does not match the GitHub Release checksum.'
 fi
+
+# `dsh plugin add` preserves a file: dependency. Keep this archive under
+# DSH_HOME instead of a temporary directory so later plugin operations can
+# still resolve the installed package.
+mv -f "$download_path" "$archive_path"
 
 printf "Installing into the '%s' DSH Profile...\n" "$profile"
 dsh plugin --profile "$profile" add "$archive_path"

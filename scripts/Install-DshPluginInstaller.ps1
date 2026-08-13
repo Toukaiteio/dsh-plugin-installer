@@ -43,22 +43,33 @@ if ($null -eq $asset) {
   throw "Release $($release.tag_name) does not contain a DSH Plugin Installer package archive."
 }
 
-$temporaryDirectory = Join-Path ([System.IO.Path]::GetTempPath()) "dsh-plugin-installer-$([guid]::NewGuid().ToString('N'))"
-$archivePath = Join-Path $temporaryDirectory $asset.name
+$dshHome = if ($null -ne $env:DSH_HOME -and $env:DSH_HOME.Trim().Length -gt 0) {
+  [System.IO.Path]::GetFullPath($env:DSH_HOME)
+} else {
+  Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile)) '.dsh'
+}
+$archiveDirectory = Join-Path (Join-Path $dshHome 'plugin-archives') 'dsh-plugin-installer'
+$archivePath = Join-Path $archiveDirectory $asset.name
+$downloadPath = Join-Path $archiveDirectory ".$($asset.name).$([guid]::NewGuid().ToString('N')).download"
 
 try {
-  New-Item -ItemType Directory -Path $temporaryDirectory | Out-Null
+  New-Item -ItemType Directory -Path $archiveDirectory -Force | Out-Null
 
   Write-Host "Downloading $($release.tag_name)..."
-  Invoke-WebRequest -Uri $asset.browser_download_url -Headers $headers -OutFile $archivePath
+  Invoke-WebRequest -Uri $asset.browser_download_url -Headers $headers -OutFile $downloadPath
 
   if ($asset.PSObject.Properties.Name -contains 'digest' -and $asset.digest -match '^sha256:(?<hash>[0-9a-fA-F]{64})$') {
     $expectedHash = $Matches.hash.ToLowerInvariant()
-    $actualHash = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
+    $actualHash = (Get-FileHash -LiteralPath $downloadPath -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($actualHash -ne $expectedHash) {
       throw 'The downloaded package checksum does not match the GitHub Release checksum.'
     }
   }
+
+  # `dsh plugin add` preserves a file: dependency. Keep this archive under
+  # DSH_HOME instead of a temporary directory so later plugin operations can
+  # still resolve the installed package.
+  Move-Item -LiteralPath $downloadPath -Destination $archivePath -Force
 
   Write-Host "Installing into the '$Profile' DSH Profile..."
   & dsh plugin --profile $Profile add $archivePath
@@ -78,10 +89,7 @@ try {
     Write-Host "Installation is complete. Start this Profile with: dsh --profile $Profile"
   }
 } finally {
-  if (Test-Path -LiteralPath $archivePath) {
-    Remove-Item -LiteralPath $archivePath -Force
-  }
-  if (Test-Path -LiteralPath $temporaryDirectory) {
-    Remove-Item -LiteralPath $temporaryDirectory -Force
+  if (Test-Path -LiteralPath $downloadPath) {
+    Remove-Item -LiteralPath $downloadPath -Force
   }
 }

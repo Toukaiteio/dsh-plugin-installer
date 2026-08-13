@@ -16,6 +16,9 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
+        with:
+          # Release notes are built from tag-to-tag history, which needs full depth.
+          fetch-depth: 0
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v6
@@ -46,7 +49,67 @@ jobs:
       - name: Create package archive
         run: pnpm pack --pack-destination .artifacts
 
+      - name: Build release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          previous_tag="$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || true)"
+          if [[ -n "$previous_tag" ]]; then
+            range="${previous_tag}..${GITHUB_REF_NAME}"
+            echo "Building notes for $range"
+          else
+            range="$GITHUB_REF_NAME"
+            echo "No previous tag found; using full history"
+          fi
+
+          section() {
+            local heading="$1" pattern="$2" lines
+            lines="$(git log --no-merges --regexp-ignore-case --extended-regexp \
+              --grep="$pattern" --pretty=format:'- %s (%h)' "$range")"
+            if [[ -n "$lines" ]]; then
+              printf '### %s\n\n%s\n\n' "$heading" "$lines" >> RELEASE_NOTES.md
+            fi
+          }
+
+          # The tag is already validated against package.json, so the archive
+          # name is derived rather than guessed from a directory listing.
+          archive="dsh-plugin-installer-$(node -p "require('./package.json').version").tgz"
+
+          {
+            printf '## dsh-plugin-installer %s\n\n' "$GITHUB_REF_NAME"
+            printf 'Install into a DSH profile:\n\n'
+            printf '```bash\ndsh plugin --profile web add ./%s\ndsh web\n```\n\n' "$archive"
+          } > RELEASE_NOTES.md
+
+          section 'Features' '^feat(\(.+\))?!?:'
+          section 'Fixes' '^fix(\(.+\))?!?:'
+          section 'Maintenance' '^(chore|docs|refactor|test|build|ci|perf|style)(\(.+\))?!?:'
+
+          other="$(git log --no-merges --extended-regexp \
+            --invert-grep --regexp-ignore-case \
+            --grep='^(feat|fix|chore|docs|refactor|test|build|ci|perf|style)(\(.+\))?!?:' \
+            --pretty=format:'- %s (%h)' "$range")"
+          if [[ -n "$other" ]]; then
+            printf '### Other changes\n\n%s\n\n' "$other" >> RELEASE_NOTES.md
+          fi
+
+          {
+            printf '### Verification\n\n'
+            printf 'This tag passed `pnpm typecheck`, `pnpm test`, `pnpm build` and `pnpm test:integration` on Node 22.\n\n'
+          } >> RELEASE_NOTES.md
+
+          if [[ -n "$previous_tag" ]]; then
+            printf '**Full changelog**: %s/compare/%s...%s\n' \
+              "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" "$previous_tag" "$GITHUB_REF_NAME" >> RELEASE_NOTES.md
+          fi
+
+          # Hand the exact archive path to the publish step.
+          echo "RELEASE_ARCHIVE=.artifacts/$archive" >> "$GITHUB_ENV"
+
+          echo '--- generated notes ---'
+          cat RELEASE_NOTES.md
+
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" .artifacts/*.tgz --generate-notes --title "$GITHUB_REF_NAME"
+        run: gh release create "$GITHUB_REF_NAME" "$RELEASE_ARCHIVE" --title "$GITHUB_REF_NAME" --notes-file RELEASE_NOTES.md

@@ -152,6 +152,7 @@ export function PluginMarketplaceSettingsTab({ t }: SettingsProps): ReactNode {
   const profiles = snapshot?.profiles ?? []
   const selectedSummary = profiles.find(profile => profile.name === selectedProfile)
   const visiblePlugins = useMemo(() => sortCatalog(plugins, sortBy, sortDirection), [plugins, sortBy, sortDirection])
+  const updatableCount = selectedSummary?.installedPlugins.filter(plugin => plugin.updateStatus === 'available').length ?? 0
 
   const inspect = async (repository: Repository): Promise<void> => {
     setWorking(true)
@@ -292,31 +293,30 @@ export function PluginMarketplaceSettingsTab({ t }: SettingsProps): ReactNode {
 
       <form className={css.search} onSubmit={event => { event.preventDefault(); void load(query, false, true) }}>
         <input value={query} type="search" placeholder={t('search')} aria-label={t('search')} onChange={event => setQuery(event.currentTarget.value)} />
+        <select
+          className={css.sortSelect}
+          value={sortBy}
+          aria-label={t('sort')}
+          title={t('sort')}
+          disabled={working || plugins.length === 0}
+          onChange={event => setSortBy(event.currentTarget.value as CatalogSortKey)}
+        >
+          <option value="updated">{t('sortUpdated')}</option>
+          <option value="name">{t('sortName')}</option>
+          <option value="stars">{t('sortStars')}</option>
+        </select>
+        <button
+          type="button"
+          className={css.sortDirection}
+          disabled={working || plugins.length === 0}
+          onClick={() => setSortDirection(direction => direction === 'asc' ? 'desc' : 'asc')}
+          aria-label={sortDirection === 'asc' ? t('sortToggleToDesc') : t('sortToggleToAsc')}
+          title={sortDirection === 'asc' ? t('sortAsc') : t('sortDesc')}
+        >
+          <span aria-hidden="true">{sortDirection === 'asc' ? '↑' : '↓'}</span>
+        </button>
         <button type="submit" className={css.secondaryButton} disabled={loading || working}>{t('refresh')}</button>
       </form>
-
-      {plugins.length > 0 ? (
-        <div className={css.sortBar}>
-          <label className={css.sortLabel}>
-            <span>{t('sort')}</span>
-            <select value={sortBy} aria-label={t('sort')} disabled={working} onChange={event => setSortBy(event.currentTarget.value as CatalogSortKey)}>
-              <option value="updated">{t('sortUpdated')}</option>
-              <option value="name">{t('sortName')}</option>
-              <option value="stars">{t('sortStars')}</option>
-            </select>
-          </label>
-          <button
-            type="button"
-            className={css.secondaryButton}
-            disabled={working}
-            onClick={() => setSortDirection(direction => direction === 'asc' ? 'desc' : 'asc')}
-            aria-label={sortDirection === 'asc' ? t('sortDesc') : t('sortAsc')}
-            aria-pressed={sortDirection === 'asc'}
-          >
-            {sortDirection === 'asc' ? t('sortAsc') : t('sortDesc')}
-          </button>
-        </div>
-      ) : null}
 
       {message !== null ? <p className={message.kind === 'error' ? css.error : css.success} role={message.kind === 'error' ? 'alert' : 'status'}>{message.text}</p> : null}
       {message?.kind === 'success' ? (
@@ -326,12 +326,17 @@ export function PluginMarketplaceSettingsTab({ t }: SettingsProps): ReactNode {
       ) : null}
       {loading ? <p className={css.status}>{t('loading')}</p> : null}
 
+      {/* Collapsed by default; opens itself only when updates are waiting. */}
       {selectedSummary !== undefined && selectedSummary.installedPlugins.length > 0 ? (
-        <section className={css.installed} aria-label={t('installedPlugins')}>
-          <div className={css.sectionHeading}>
-            <h2>{t('installedPlugins')}</h2>
-            <p>{t('installedPluginsHint')}</p>
-          </div>
+        <details className={css.installed} open={updatableCount > 0}>
+          <summary className={css.installedSummary}>
+            <span className={css.installedTitle}>{t('installedPlugins')}</span>
+            <span className={css.installedBadge}>
+              {selectedSummary.installedPlugins.length} {t('installedCount')}
+            </span>
+            {updatableCount > 0 ? <span className={css.updateBadge}>{updatableCount} {t('updateAvailable')}</span> : null}
+          </summary>
+          <p className={css.installedHint}>{t('installedPluginsHint')}</p>
           <ul className={css.rows}>
             {selectedSummary.installedPlugins.map(plugin => (
               <li key={plugin.packageName} className={css.row}>
@@ -348,7 +353,7 @@ export function PluginMarketplaceSettingsTab({ t }: SettingsProps): ReactNode {
               </li>
             ))}
           </ul>
-        </section>
+        </details>
       ) : null}
 
       {candidate !== null ? (

@@ -38,23 +38,18 @@ DSH Plugin Installer 会在官方 Web UI 的 **设置 → 插件** 中增加“�
 
 ### Windows 一键安装
 
-在 Windows 上，可以下载并运行 PowerShell 安装脚本。脚本会下载最新稳定版 GitHub Release，在 GitHub 提供 SHA-256 摘要时校验下载内容，将插件安装到 `web` Profile，并启动 DSH Web：
+在 Windows 上，可以直接运行 PowerShell 安装脚本。脚本会下载最新稳定版 GitHub Release，在 GitHub 提供 SHA-256 摘要时校验下载内容，并将归档保留在 `DSH_HOME/plugin-archives/dsh-plugin-installer/` 以便后续解析依赖，然后将插件安装到 `web` Profile 并启动 DSH Web：
 
 ```powershell
-Invoke-WebRequest https://raw.githubusercontent.com/Toukaiteio/dsh-plugin-installer/main/scripts/Install-DshPluginInstaller.ps1 -OutFile .\Install-DshPluginInstaller.ps1
-.\Install-DshPluginInstaller.ps1
+irm https://raw.githubusercontent.com/Toukaiteio/dsh-plugin-installer/main/scripts/Install-DshPluginInstaller.ps1 | iex
 ```
 
-如果 PowerShell 阻止执行本地下载的脚本，可以只对这次运行绕过执行策略：
+如需指定其他 Profile 或不自动启动 DSH Web，请先下载脚本后再传入参数：
 
 ```powershell
-PowerShell -ExecutionPolicy Bypass -File .\Install-DshPluginInstaller.ps1
-```
-
-可以使用 `-Profile` 指定其他 DSH Profile，使用 `-NoStart` 仅安装而不启动默认 Web Profile：
-
-```powershell
-.\Install-DshPluginInstaller.ps1 -Profile work -NoStart
+$script = "$env:TEMP\Install-DshPluginInstaller.ps1"
+Invoke-WebRequest https://raw.githubusercontent.com/Toukaiteio/dsh-plugin-installer/main/scripts/Install-DshPluginInstaller.ps1 -OutFile $script
+& $script -Profile work -NoStart
 ```
 
 ### macOS 和 Linux 安装

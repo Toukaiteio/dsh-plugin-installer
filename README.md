@@ -38,23 +38,18 @@ The project intentionally keeps the interface compact and newcomer-friendly. It 
 
 ### Windows one-click installer
 
-On Windows, download and run the PowerShell installer. It downloads the latest stable GitHub Release, verifies its SHA-256 digest when available, installs it into the `web` Profile, and starts DSH Web:
+On Windows, run the PowerShell installer directly. It downloads the latest stable GitHub Release, verifies its SHA-256 digest when available, keeps the archive under `DSH_HOME/plugin-archives/dsh-plugin-installer/` for future dependency resolution, installs it into the `web` Profile, and starts DSH Web:
 
 ```powershell
-Invoke-WebRequest https://raw.githubusercontent.com/Toukaiteio/dsh-plugin-installer/main/scripts/Install-DshPluginInstaller.ps1 -OutFile .\Install-DshPluginInstaller.ps1
-.\Install-DshPluginInstaller.ps1
+irm https://raw.githubusercontent.com/Toukaiteio/dsh-plugin-installer/main/scripts/Install-DshPluginInstaller.ps1 | iex
 ```
 
-If PowerShell blocks locally downloaded scripts, run it for this invocation only:
+For another Profile or to prevent DSH Web from starting, download the script first so its parameters can be passed explicitly:
 
 ```powershell
-PowerShell -ExecutionPolicy Bypass -File .\Install-DshPluginInstaller.ps1
-```
-
-Use `-Profile` to select another DSH Profile, and `-NoStart` to install without starting the default Web Profile:
-
-```powershell
-.\Install-DshPluginInstaller.ps1 -Profile work -NoStart
+$script = "$env:TEMP\Install-DshPluginInstaller.ps1"
+Invoke-WebRequest https://raw.githubusercontent.com/Toukaiteio/dsh-plugin-installer/main/scripts/Install-DshPluginInstaller.ps1 -OutFile $script
+& $script -Profile work -NoStart
 ```
 
 ### macOS and Linux installer

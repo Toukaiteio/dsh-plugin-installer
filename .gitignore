@@ -29,6 +29,9 @@ dsh-plugin-installer-*.tgz
 artifacts/
 .artifacts/
 
+# Generated release notes (built in CI)
+RELEASE_NOTES.md
+
 # Operating-system and editor files
 .DS_Store
 Thumbs.db
