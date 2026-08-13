@@ -38,7 +38,7 @@ The project intentionally keeps the interface compact and newcomer-friendly. It 
 Build or download the package archive from the [latest GitHub Release](https://github.com/Toukaiteio/dsh-plugin-installer/releases), then add it to the Web Profile you use:
 
 ```bash
-dsh plugin --profile web add ./dsh-plugin-installer-0.1.4.tgz
+dsh plugin --profile web add ./dsh-plugin-installer-0.1.5.tgz
 dsh web
 ```
 
@@ -132,8 +132,8 @@ GitHub Actions runs the full verification suite on pushes to `main` and on pull 
 Pushing a matching version tag creates a GitHub Release and attaches the package archive:
 
 ```bash
-git tag v0.1.4
-git push origin v0.1.4
+git tag v0.1.5
+git push origin v0.1.5
 ```
 
 The release workflow rejects a tag when its version does not match `package.json`.

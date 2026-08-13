@@ -26,6 +26,8 @@ pnpm-debug.log*
 
 # Generated local release archives
 dsh-plugin-installer-*.tgz
+artifacts/
+.artifacts/
 
 # Operating-system and editor files
 .DS_Store
@@ -34,4 +36,3 @@ Thumbs.db
 *.swo
 .idea/
 .vscode/
-
