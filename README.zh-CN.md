@@ -24,7 +24,8 @@ DSH Plugin Installer 会在官方 Web UI 的 **设置 → 插件** 中增加“�
 - 文案和日期格式自动跟随官方 DSH 的语言偏好。
 - 列出 Web Profile，快速打开其他 Profile，也可以创建新的 Web Profile。
 - 安装到当前 Profile 后提示重启，并提供一键重启按钮。
-- 服务端缓存搜索结果五分钟，降低 GitHub API 请求压力。
+- 插件列表在服务端与客户端各缓存十二分钟，降低 GitHub API 请求压力并加快再次打开的速度。
+- 支持按更新时间、按名称、按星标数排序插件列表。
 
 ## 环境要求
 
@@ -35,10 +36,48 @@ DSH Plugin Installer 会在官方 Web UI 的 **设置 → 插件** 中增加“�
 
 ## 安装
 
+### Windows 一键安装
+
+在 Windows 上，可以下载并运行 PowerShell 安装脚本。脚本会下载最新稳定版 GitHub Release，在 GitHub 提供 SHA-256 摘要时校验下载内容，将插件安装到 `web` Profile，并启动 DSH Web：
+
+```powershell
+Invoke-WebRequest https://raw.githubusercontent.com/Toukaiteio/dsh-plugin-installer/main/scripts/Install-DshPluginInstaller.ps1 -OutFile .\Install-DshPluginInstaller.ps1
+.\Install-DshPluginInstaller.ps1
+```
+
+如果 PowerShell 阻止执行本地下载的脚本，可以只对这次运行绕过执行策略：
+
+```powershell
+PowerShell -ExecutionPolicy Bypass -File .\Install-DshPluginInstaller.ps1
+```
+
+可以使用 `-Profile` 指定其他 DSH Profile，使用 `-NoStart` 仅安装而不启动默认 Web Profile：
+
+```powershell
+.\Install-DshPluginInstaller.ps1 -Profile work -NoStart
+```
+
+### macOS 和 Linux 安装
+
+在 macOS 或 Linux 上，可以下载并运行 Bash 安装脚本。它与 Windows 脚本遵循相同的下载 Release、校验摘要、安装和启动流程：
+
+```bash
+curl --fail --location --remote-name https://raw.githubusercontent.com/Toukaiteio/dsh-plugin-installer/main/scripts/install-dsh-plugin-installer.sh
+bash ./install-dsh-plugin-installer.sh
+```
+
+除 DSH 外，该脚本还需要 `bash`、`curl` 与 Node.js。可以使用 `--profile` 指定其他 Profile，或使用 `--no-start` 仅安装而不启动 DSH：
+
+```bash
+bash ./install-dsh-plugin-installer.sh --profile work --no-start
+```
+
+### 手动安装
+
 可以从[最新 GitHub Release](https://github.com/Toukaiteio/dsh-plugin-installer/releases) 下载压缩包，也可以自行构建，然后将它添加到正在使用的 Web Profile：
 
 ```bash
-dsh plugin --profile web add ./dsh-plugin-installer-0.1.5.tgz
+dsh plugin --profile web add ./dsh-plugin-installer-0.1.6.tgz
 dsh web
 ```
 
@@ -130,8 +169,8 @@ GitHub Actions 会在推送到 `main` 和创建 Pull Request 时运行完整校�
 推送与 `package.json` 版本一致的 tag 后，会自动创建 GitHub Release 并上传安装包：
 
 ```bash
-git tag v0.1.5
-git push origin v0.1.5
+git tag v0.1.6
+git push origin v0.1.6
 ```
 
 如果 tag 版本与 `package.json` 不一致，发布工作流会直接失败。

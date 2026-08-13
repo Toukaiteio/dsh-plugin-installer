@@ -24,7 +24,8 @@ The project intentionally keeps the interface compact and newcomer-friendly. It 
 - Interface copy and date formatting that follow the official DSH language preference.
 - Web Profile list, fast Profile opening, and Web Profile creation.
 - Restart guidance and a one-click restart action after installing into the active Profile.
-- Five-minute server-side search caching to reduce GitHub API pressure.
+- Twelve-minute plugin-list caching (server and client side) to reduce GitHub API pressure and speed up revisits.
+- Sort the marketplace list by updated time, name, or star count.
 
 ## Requirements
 
@@ -35,10 +36,48 @@ The project intentionally keeps the interface compact and newcomer-friendly. It 
 
 ## Install
 
+### Windows one-click installer
+
+On Windows, download and run the PowerShell installer. It downloads the latest stable GitHub Release, verifies its SHA-256 digest when available, installs it into the `web` Profile, and starts DSH Web:
+
+```powershell
+Invoke-WebRequest https://raw.githubusercontent.com/Toukaiteio/dsh-plugin-installer/main/scripts/Install-DshPluginInstaller.ps1 -OutFile .\Install-DshPluginInstaller.ps1
+.\Install-DshPluginInstaller.ps1
+```
+
+If PowerShell blocks locally downloaded scripts, run it for this invocation only:
+
+```powershell
+PowerShell -ExecutionPolicy Bypass -File .\Install-DshPluginInstaller.ps1
+```
+
+Use `-Profile` to select another DSH Profile, and `-NoStart` to install without starting the default Web Profile:
+
+```powershell
+.\Install-DshPluginInstaller.ps1 -Profile work -NoStart
+```
+
+### macOS and Linux installer
+
+On macOS or Linux, download the Bash installer and run it. It follows the same release download, checksum verification, installation, and start flow as the Windows installer:
+
+```bash
+curl --fail --location --remote-name https://raw.githubusercontent.com/Toukaiteio/dsh-plugin-installer/main/scripts/install-dsh-plugin-installer.sh
+bash ./install-dsh-plugin-installer.sh
+```
+
+It requires `bash`, `curl`, and Node.js in addition to DSH. Use `--profile` for another Profile, or `--no-start` to install without starting DSH:
+
+```bash
+bash ./install-dsh-plugin-installer.sh --profile work --no-start
+```
+
+### Manual installation
+
 Build or download the package archive from the [latest GitHub Release](https://github.com/Toukaiteio/dsh-plugin-installer/releases), then add it to the Web Profile you use:
 
 ```bash
-dsh plugin --profile web add ./dsh-plugin-installer-0.1.5.tgz
+dsh plugin --profile web add ./dsh-plugin-installer-0.1.6.tgz
 dsh web
 ```
 
@@ -132,8 +171,8 @@ GitHub Actions runs the full verification suite on pushes to `main` and on pull 
 Pushing a matching version tag creates a GitHub Release and attaches the package archive:
 
 ```bash
-git tag v0.1.5
-git push origin v0.1.5
+git tag v0.1.6
+git push origin v0.1.6
 ```
 
 The release workflow rejects a tag when its version does not match `package.json`.

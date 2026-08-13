@@ -16,6 +16,7 @@ import {
   githubInstallSpec,
   isProfileName,
   isRepositorySegment,
+  normalizeCatalogQuery,
   parseDshBundleManifest,
 } from './marketplace.js'
 
@@ -24,6 +25,10 @@ export const inject = ['webServer']
 
 const ROUTE_PREFIX = '/dsh-plugin-installer'
 const API_PREFIX = `${ROUTE_PREFIX}/api`
+/** How long the marketplace catalog stays cached before re-querying GitHub. */
+const CATALOG_CACHE_TTL_MS = 12 * 60_000
+/** Bound the number of distinct searches retained by one Web Profile process. */
+const CATALOG_CACHE_MAX_ENTRIES = 24
 const SELF_MANIFEST = JSON.parse(readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8')) as {
   name: string
 }
@@ -85,7 +90,9 @@ class MarketplaceRuntime {
       const tail = url.pathname.slice(API_PREFIX.length) || '/'
       if (request.method === 'GET' && tail === '/state') return this.json(response, 200, await this.state())
       if (request.method === 'GET' && tail === '/plugins') {
-        return this.json(response, 200, { plugins: await this.search(url.searchParams.get('query') ?? '') })
+        return this.json(response, 200, {
+          plugins: await this.search(url.searchParams.get('query') ?? '', url.searchParams.get('refresh') === '1'),
+        })
       }
       const match = /^\/plugin\/([^/]+)\/([^/]+)$/.exec(tail)
       if (request.method === 'GET' && match !== null) {
@@ -143,10 +150,10 @@ class MarketplaceRuntime {
     }))).then(value => value.sort((a, b) => a.name.localeCompare(b.name)))
   }
 
-  private async search(query: string): Promise<GitHubRepository[]> {
-    const normalized = query.trim().slice(0, 120)
+  private async search(query: string, bypassCache = false): Promise<GitHubRepository[]> {
+    const normalized = normalizeCatalogQuery(query)
     const cached = this.searchCache.get(normalized)
-    if (cached !== undefined && cached.expiresAt > Date.now()) return cached.value
+    if (!bypassCache && cached !== undefined && cached.expiresAt > Date.now()) return cached.value
     const words = normalized.length === 0 ? '' : ` ${normalized.replace(/\s+/g, ' ')}`
     const responses = await Promise.all([
       this.githubJson<{ items: GitHubRepoResponse[] }>(`/search/repositories?q=${encodeURIComponent(`topic:dsh-plugin archived:false${words}`)}&sort=updated&order=desc&per_page=30`),
@@ -155,8 +162,20 @@ class MarketplaceRuntime {
     const combined = new Map<number, GitHubRepository>()
     for (const item of responses.flatMap(response => response.items)) combined.set(item.id, toRepository(item))
     const value = [...combined.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 40)
-    this.searchCache.set(normalized, { value, expiresAt: Date.now() + 5 * 60_000 })
+    this.cacheSearch(normalized, value)
     return value
+  }
+
+  private cacheSearch(query: string, value: GitHubRepository[]): void {
+    const now = Date.now()
+    for (const [key, entry] of this.searchCache) {
+      if (entry.expiresAt <= now) this.searchCache.delete(key)
+    }
+    if (!this.searchCache.has(query) && this.searchCache.size >= CATALOG_CACHE_MAX_ENTRIES) {
+      const oldest = this.searchCache.keys().next().value
+      if (oldest !== undefined) this.searchCache.delete(oldest)
+    }
+    this.searchCache.set(query, { value, expiresAt: now + CATALOG_CACHE_TTL_MS })
   }
 
   private async inspect(owner: string, repository: string): Promise<PluginCandidate> {

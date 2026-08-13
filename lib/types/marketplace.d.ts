@@ -57,4 +57,22 @@ export declare function isRepositorySegment(value: unknown): value is string;
 /** Extract only the fields that make a root package a DSH bundle. */
 export declare function parseDshBundleManifest(value: unknown): DshBundleManifest | null;
 export declare function githubInstallSpec(owner: string, repository: string, sha: string): string;
+/** Normalize a catalog query so clients and the host share the same cache key. */
+export declare function normalizeCatalogQuery(query: string): string;
+/** Catalog sort keys offered by the marketplace UI. */
+export type CatalogSortKey = 'updated' | 'name' | 'stars';
+/** Catalog sort direction offered by the marketplace UI. */
+export type CatalogSortDirection = 'asc' | 'desc';
+/** Structural shape required to sort a marketplace catalog entry. */
+export interface CatalogSortEntry {
+    readonly fullName: string;
+    readonly stars: number;
+    readonly updatedAt: string;
+}
+/**
+ * Return a new catalog sorted by the chosen key without mutating the source.
+ * `updated` orders by the repository update timestamp, `name` by the full
+ * repository name, and `stars` by the star count.
+ */
+export declare function sortCatalog<T extends CatalogSortEntry>(entries: readonly T[], key: CatalogSortKey, direction: CatalogSortDirection): T[];
 //# sourceMappingURL=marketplace.d.ts.map

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { MarketplaceLocaleKey } from './locales.js'
+import { normalizeCatalogQuery, sortCatalog, type CatalogSortDirection, type CatalogSortKey } from '../marketplace.js'
 import css from './PluginMarketplaceSettingsTab.module.css'
 
 type SettingsProps = PropsRuntime<'settings.plugins.tab'> & PropsLocale<'dsh-plugin-installer'>
@@ -72,6 +73,41 @@ function updated(value: string, locale: string): string {
   return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat(locale, { dateStyle: 'medium' }).format(date)
 }
 
+/** Client-side catalog cache lifetime, kept in sync with the server cache. */
+const CATALOG_CACHE_TTL_MS = 12 * 60_000
+const CATALOG_CACHE_MAX_ENTRIES = 24
+
+interface CatalogCacheEntry {
+  readonly fetchedAt: number
+  readonly plugins: Repository[]
+}
+
+const catalogCache = new Map<string, CatalogCacheEntry>()
+
+function readCatalogCache(query: string): Repository[] | null {
+  const normalized = normalizeCatalogQuery(query)
+  const entry = catalogCache.get(normalized)
+  if (entry === undefined) return null
+  if (Date.now() - entry.fetchedAt > CATALOG_CACHE_TTL_MS) {
+    catalogCache.delete(normalized)
+    return null
+  }
+  return entry.plugins
+}
+
+function writeCatalogCache(query: string, plugins: Repository[]): void {
+  const now = Date.now()
+  const normalized = normalizeCatalogQuery(query)
+  for (const [key, entry] of catalogCache) {
+    if (now - entry.fetchedAt > CATALOG_CACHE_TTL_MS) catalogCache.delete(key)
+  }
+  if (!catalogCache.has(normalized) && catalogCache.size >= CATALOG_CACHE_MAX_ENTRIES) {
+    const oldest = catalogCache.keys().next().value
+    if (oldest !== undefined) catalogCache.delete(oldest)
+  }
+  catalogCache.set(normalized, { fetchedAt: now, plugins })
+}
+
 /** Marketplace UI: one toolbar, one inline review panel and a compact repository list. */
 export function PluginMarketplaceSettingsTab({ t }: SettingsProps): ReactNode {
   const [snapshot, setSnapshot] = useState<StateSnapshot | null>(null)
@@ -85,18 +121,25 @@ export function PluginMarketplaceSettingsTab({ t }: SettingsProps): ReactNode {
   const [message, setMessage] = useState<{ kind: 'error' | 'success'; text: string } | null>(null)
   const [restartAvailable, setRestartAvailable] = useState(false)
   const [newProfile, setNewProfile] = useState('')
+  const [sortBy, setSortBy] = useState<CatalogSortKey>('updated')
+  const [sortDirection, setSortDirection] = useState<CatalogSortDirection>('desc')
 
-  const load = async (search = query, preserveMessage = false): Promise<void> => {
+  const load = async (search = query, preserveMessage = false, bypassCache = false): Promise<void> => {
     setLoading(true)
     if (!preserveMessage) setMessage(null)
     try {
-      const [state, catalog] = await Promise.all([
-        api<StateSnapshot>('/state'),
-        api<{ plugins: Repository[] }>(`/plugins?query=${encodeURIComponent(search)}`),
-      ])
+      const normalizedSearch = normalizeCatalogQuery(search)
+      const cached = bypassCache ? null : readCatalogCache(normalizedSearch)
+      const catalogPromise = cached === null
+        ? api<{ plugins: Repository[] }>(`/plugins?query=${encodeURIComponent(normalizedSearch)}${bypassCache ? '&refresh=1' : ''}`).then(result => {
+            writeCatalogCache(normalizedSearch, result.plugins)
+            return result.plugins
+          })
+        : Promise.resolve(cached)
+      const [state, catalog] = await Promise.all([api<StateSnapshot>('/state'), catalogPromise])
       setSnapshot(state)
       setSelectedProfile(current => current || state.currentProfile)
-      setPlugins(catalog.plugins)
+      setPlugins(catalog)
     } catch (error) {
       setMessage({ kind: 'error', text: error instanceof Error ? error.message : t('loadFailed') })
     } finally {
@@ -108,7 +151,7 @@ export function PluginMarketplaceSettingsTab({ t }: SettingsProps): ReactNode {
 
   const profiles = snapshot?.profiles ?? []
   const selectedSummary = profiles.find(profile => profile.name === selectedProfile)
-  const visiblePlugins = useMemo(() => plugins, [plugins])
+  const visiblePlugins = useMemo(() => sortCatalog(plugins, sortBy, sortDirection), [plugins, sortBy, sortDirection])
 
   const inspect = async (repository: Repository): Promise<void> => {
     setWorking(true)
@@ -247,10 +290,33 @@ export function PluginMarketplaceSettingsTab({ t }: SettingsProps): ReactNode {
         <button type="button" className={css.secondaryButton} disabled={working || newProfile.trim().length === 0} onClick={() => void createProfile()}>{t('createAndOpen')}</button>
       </section>
 
-      <form className={css.search} onSubmit={event => { event.preventDefault(); void load(query) }}>
+      <form className={css.search} onSubmit={event => { event.preventDefault(); void load(query, false, true) }}>
         <input value={query} type="search" placeholder={t('search')} aria-label={t('search')} onChange={event => setQuery(event.currentTarget.value)} />
         <button type="submit" className={css.secondaryButton} disabled={loading || working}>{t('refresh')}</button>
       </form>
+
+      {plugins.length > 0 ? (
+        <div className={css.sortBar}>
+          <label className={css.sortLabel}>
+            <span>{t('sort')}</span>
+            <select value={sortBy} aria-label={t('sort')} disabled={working} onChange={event => setSortBy(event.currentTarget.value as CatalogSortKey)}>
+              <option value="updated">{t('sortUpdated')}</option>
+              <option value="name">{t('sortName')}</option>
+              <option value="stars">{t('sortStars')}</option>
+            </select>
+          </label>
+          <button
+            type="button"
+            className={css.secondaryButton}
+            disabled={working}
+            onClick={() => setSortDirection(direction => direction === 'asc' ? 'desc' : 'asc')}
+            aria-label={sortDirection === 'asc' ? t('sortDesc') : t('sortAsc')}
+            aria-pressed={sortDirection === 'asc'}
+          >
+            {sortDirection === 'asc' ? t('sortAsc') : t('sortDesc')}
+          </button>
+        </div>
+      ) : null}
 
       {message !== null ? <p className={message.kind === 'error' ? css.error : css.success} role={message.kind === 'error' ? 'alert' : 'status'}>{message.text}</p> : null}
       {message?.kind === 'success' ? (

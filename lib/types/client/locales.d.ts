@@ -27,6 +27,12 @@ export declare const zh: {
     readonly profileFailed: "Profile 操作未完成。";
     readonly stars: "星标";
     readonly updated: "更新于";
+    readonly sort: "排序";
+    readonly sortUpdated: "按更新时间";
+    readonly sortName: "按名称";
+    readonly sortStars: "按星标数";
+    readonly sortAsc: "升序";
+    readonly sortDesc: "降序";
     readonly viewRepository: "查看仓库";
     readonly close: "收起";
     readonly noDescription: "该仓库没有提供说明。";

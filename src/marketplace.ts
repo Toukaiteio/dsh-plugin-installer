@@ -96,3 +96,39 @@ export function githubInstallSpec(owner: string, repository: string, sha: string
   }
   return `github:${owner}/${repository}#${sha}`
 }
+
+/** Normalize a catalog query so clients and the host share the same cache key. */
+export function normalizeCatalogQuery(query: string): string {
+  return query.trim().replace(/\s+/g, ' ').slice(0, 120)
+}
+
+/** Catalog sort keys offered by the marketplace UI. */
+export type CatalogSortKey = 'updated' | 'name' | 'stars'
+
+/** Catalog sort direction offered by the marketplace UI. */
+export type CatalogSortDirection = 'asc' | 'desc'
+
+/** Structural shape required to sort a marketplace catalog entry. */
+export interface CatalogSortEntry {
+  readonly fullName: string
+  readonly stars: number
+  readonly updatedAt: string
+}
+
+/**
+ * Return a new catalog sorted by the chosen key without mutating the source.
+ * `updated` orders by the repository update timestamp, `name` by the full
+ * repository name, and `stars` by the star count.
+ */
+export function sortCatalog<T extends CatalogSortEntry>(entries: readonly T[], key: CatalogSortKey, direction: CatalogSortDirection): T[] {
+  const factor = direction === 'asc' ? 1 : -1
+  return [...entries].sort((a, b) => {
+    const compared = key === 'name'
+      ? a.fullName.localeCompare(b.fullName, undefined, { numeric: true, sensitivity: 'base' })
+      : key === 'stars'
+        ? a.stars - b.stars
+        : a.updatedAt.localeCompare(b.updatedAt)
+    if (compared !== 0) return factor * compared
+    return a.fullName.localeCompare(b.fullName, undefined, { numeric: true, sensitivity: 'variant' })
+  })
+}
