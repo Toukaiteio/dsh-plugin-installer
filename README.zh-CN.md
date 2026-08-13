@@ -38,7 +38,7 @@ DSH Plugin Installer 会在官方 Web UI 的 **设置 → 插件** 中增加“�
 可以从[最新 GitHub Release](https://github.com/Toukaiteio/dsh-plugin-installer/releases) 下载压缩包，也可以自行构建，然后将它添加到正在使用的 Web Profile：
 
 ```bash
-dsh plugin --profile web add ./dsh-plugin-installer-0.1.3.tgz
+dsh plugin --profile web add ./dsh-plugin-installer-0.1.4.tgz
 dsh web
 ```
 
@@ -130,8 +130,8 @@ GitHub Actions 会在推送到 `main` 和创建 Pull Request 时运行完整校�
 推送与 `package.json` 版本一致的 tag 后，会自动创建 GitHub Release 并上传安装包：
 
 ```bash
-git tag v0.1.3
-git push origin v0.1.3
+git tag v0.1.4
+git push origin v0.1.4
 ```
 
 如果 tag 版本与 `package.json` 不一致，发布工作流会直接失败。

@@ -43,8 +43,11 @@ export default defineConfig([
     outDir: 'lib',
     format: 'cjs',
     platform: 'browser',
+    target: 'es2020',
     dts: false,
     clean: false,
+    // DSH loads web extensions through a CommonJS factory wrapper. Set an
+    // explicit browser target so tsdown does not infer the package's Node target.
     external: platformExternals,
     noExternal: (id: string) => (platformExternals.includes(id) ? undefined : true),
     plugins: [
