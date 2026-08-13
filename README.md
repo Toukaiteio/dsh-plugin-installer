@@ -17,6 +17,7 @@ The project intentionally keeps the interface compact and newcomer-friendly. It 
 - Online discovery from GitHub `dsh-plugin` and `dsh` topics.
 - Root `package.json` validation for `dsh.bundle.patch` before installation.
 - Verified GitHub Release installs using the published `.tgz` build artifact whenever available; source installs are allowed only when the checked-in JavaScript entry exists.
+- Optional Release version selection from the marketplace list; stable releases are preferred by default.
 - Release archive SHA-256 verification when GitHub provides a digest.
 - Installation into a selected DSH Profile.
 - Installed-state detection from both GitHub dependency specs and package repository metadata.
@@ -96,6 +97,8 @@ The marketplace treats a GitHub topic as a discovery hint, not as a trust decisi
 5. If no suitable Release exists, permits a commit-pinned source install only after confirming the package's declared JavaScript entry exists in that exact commit.
 
 The marketplace installs built Release archives when available, so a source repository's `prepare` script is not used in that path. The guarded source fallback remains subject to DSH/pnpm lifecycle-script behavior.
+
+If a repository has neither a usable Release archive nor a verifiable built JavaScript entry, the marketplace refuses the installation and explains why. A source fallback that needs a `prepare` build script requires an explicit per-plugin confirmation.
 
 ## Installed plugin management
 

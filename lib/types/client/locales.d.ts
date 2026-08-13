@@ -13,6 +13,14 @@ export declare const zh: {
     readonly empty: "没有找到匹配的插件。";
     readonly install: "安装";
     readonly inspecting: "正在检查 DSH bundle…";
+    readonly openingProfile: "正在打开…";
+    readonly creatingProfile: "正在创建…";
+    readonly restarting: "正在重启…";
+    readonly loadingVersions: "正在读取版本…";
+    readonly chooseVersion: "选择版本";
+    readonly installVersion: "安装版本";
+    readonly releaseChoicesUnavailable: "没有可用的 Release 安装包，将按源码回退规则处理。";
+    readonly sourceBuildApproval: "此插件没有可用的 Release，将从源码安装并执行其构建脚本。我已查看仓库，并允许本次构建。";
     readonly installedPlugin: "已安装";
     readonly invalidBundle: "不是可安装的 DSH bundle";
     readonly bundleVersion: "版本";
@@ -21,6 +29,7 @@ export declare const zh: {
     readonly buildPermission: "此仓库包含 prepare 安装脚本；我了解这会执行第三方代码，并允许为该插件授予构建权限。";
     readonly installing: "正在安装…";
     readonly installed: "安装完成。重启 DSH 后生效。";
+    readonly installedFromSource: "安装完成。由于没有可用的 Release，本次使用了已验证入口的源码回退。重启 DSH 后生效。";
     readonly restartNow: "立即重启 DSH";
     readonly restartUnavailable: "请重启目标 Profile 后生效。";
     readonly installFailed: "安装未完成。";

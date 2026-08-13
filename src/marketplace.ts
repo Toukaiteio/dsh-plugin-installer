@@ -29,10 +29,14 @@ export interface PluginCandidate {
   readonly description: string | null
   readonly installSpec: string | null
   readonly release: GitHubReleaseArchive | null
+  readonly releases: readonly GitHubReleaseArchive[]
+  readonly installSource: PluginInstallSource | null
   readonly validBundle: boolean
   readonly reason: string | null
   readonly requiresBuildApproval: boolean
 }
+
+export type PluginInstallSource = 'release' | 'source'
 
 /** A verified package archive attached to the repository's latest GitHub Release. */
 export interface GitHubReleaseArchive {
@@ -42,6 +46,7 @@ export interface GitHubReleaseArchive {
   readonly downloadUrl: string
   readonly sha256: string | null
   readonly size: number | null
+  readonly prerelease: boolean
 }
 
 export type PluginUpdateStatus = 'available' | 'up-to-date' | 'unknown'
@@ -119,6 +124,7 @@ export function githubReleaseArchive(packageName: string, value: unknown): GitHu
   if (!isPackageName(packageName) || value === null || typeof value !== 'object' || Array.isArray(value)) return null
   const release = value as Record<string, unknown>
   const tag = release.tag_name
+  const releasePrerelease = release.prerelease === true
   const assets = release.assets
   if (typeof tag !== 'string' || !isReleaseTag(tag) || !Array.isArray(assets)) return null
   const version = tag.startsWith('v') ? tag.slice(1) : tag
@@ -132,12 +138,26 @@ export function githubReleaseArchive(packageName: string, value: unknown): GitHu
     if (typeof name !== 'string' || typeof downloadUrl !== 'string' || name !== expectedName || !isHttpsUrl(downloadUrl)) return []
     const digest = typeof asset.digest === 'string' && /^sha256:[0-9a-f]{64}$/i.test(asset.digest) ? asset.digest.slice('sha256:'.length).toLowerCase() : null
     const size = typeof asset.size === 'number' && Number.isSafeInteger(asset.size) && asset.size >= 0 ? asset.size : null
-    return [{ tag, version, name, downloadUrl, sha256: digest, size }]
+    const prerelease = asset.prerelease === true || releasePrerelease
+    return [{ tag, version, name, downloadUrl, sha256: digest, size, prerelease }]
   })
   return candidates.length === 1 ? candidates[0] ?? null : null
 }
 
-function isReleaseTag(value: string): boolean {
+/** Preserve GitHub's release order while retaining only installable package archives. */
+export function githubReleaseArchives(packageName: string, value: unknown): GitHubReleaseArchive[] {
+  if (!Array.isArray(value)) return []
+  const tags = new Set<string>()
+  return value.flatMap((release): GitHubReleaseArchive[] => {
+    if (release !== null && typeof release === 'object' && !Array.isArray(release) && (release as { draft?: unknown }).draft === true) return []
+    const archive = githubReleaseArchive(packageName, release)
+    if (archive === null || tags.has(archive.tag)) return []
+    tags.add(archive.tag)
+    return [archive]
+  })
+}
+
+export function isReleaseTag(value: string): boolean {
   return /^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(value)
 }
 

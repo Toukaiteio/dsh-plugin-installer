@@ -17,6 +17,7 @@ DSH Plugin Installer 会在官方 Web UI 的 **设置 → 插件** 中增加“�
 - 在线发现 GitHub `dsh-plugin` 和 `dsh` Topic 下的仓库。
 - 安装前验证根目录 `package.json` 是否声明 `dsh.bundle.patch`。
 - 优先使用 GitHub Release 中已构建的 `.tgz` 安装包；仅在已确认仓库提交了可加载入口时才允许源码安装。
+- 可以在插件列表中选择 Release 版本；默认优先选择稳定版。
 - GitHub 提供摘要时校验 Release 安装包的 SHA-256。
 - 安装到选中的 DSH Profile。
 - 通过 GitHub 依赖地址和包的 repository 元数据识别“已安装”状态。
@@ -96,6 +97,8 @@ GitHub Topic 只作为发现信号，不代表安全审核或官方背书。用�
 5. 没有合适 Release 时，仅在确认包所声明的 JavaScript 入口文件确实存在于该具体提交后，才允许使用固定 commit 的源码安装。
 
 有 Release 时，插件市场会安装已构建的 Release 安装包，不会把源码仓库的 `prepare` 作为市场构建步骤执行。受控的源码回退安装仍遵循 DSH/pnpm 对生命周期脚本的处理规则。
+
+如果仓库既没有可用的 Release 安装包，也没有可验证的已构建 JavaScript 入口，插件市场会拒绝安装并说明原因。源码回退需要执行 `prepare` 构建脚本时，还必须针对该插件明确确认。
 
 ## 已安装插件管理
 

@@ -27,10 +27,13 @@ export interface PluginCandidate {
     readonly description: string | null;
     readonly installSpec: string | null;
     readonly release: GitHubReleaseArchive | null;
+    readonly releases: readonly GitHubReleaseArchive[];
+    readonly installSource: PluginInstallSource | null;
     readonly validBundle: boolean;
     readonly reason: string | null;
     readonly requiresBuildApproval: boolean;
 }
+export type PluginInstallSource = 'release' | 'source';
 /** A verified package archive attached to the repository's latest GitHub Release. */
 export interface GitHubReleaseArchive {
     readonly tag: string;
@@ -39,6 +42,7 @@ export interface GitHubReleaseArchive {
     readonly downloadUrl: string;
     readonly sha256: string | null;
     readonly size: number | null;
+    readonly prerelease: boolean;
 }
 export type PluginUpdateStatus = 'available' | 'up-to-date' | 'unknown';
 /** A direct, GitHub-backed DSH bundle installed in one Profile. */
@@ -73,6 +77,9 @@ export declare function githubInstallSpec(owner: string, repository: string, sha
  * The marketplace installs release archives, never an unbuilt source checkout.
  */
 export declare function githubReleaseArchive(packageName: string, value: unknown): GitHubReleaseArchive | null;
+/** Preserve GitHub's release order while retaining only installable package archives. */
+export declare function githubReleaseArchives(packageName: string, value: unknown): GitHubReleaseArchive[];
+export declare function isReleaseTag(value: string): boolean;
 /** Accept only a package-relative JavaScript entry that can be checked in GitHub Contents. */
 export declare function isPackageEntryPath(value: string): boolean;
 /** Normalize a catalog query so clients and the host share the same cache key. */

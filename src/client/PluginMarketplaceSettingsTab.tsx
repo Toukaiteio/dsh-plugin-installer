@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { Fragment, useEffect, useMemo, useState, type ReactNode } from 'react'
 import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { MarketplaceLocaleKey } from './locales.js'
 import { normalizeCatalogQuery, sortCatalog, type CatalogSortDirection, type CatalogSortKey } from '../marketplace.js'
@@ -34,9 +34,17 @@ interface Candidate {
   readonly packageName: string | null
   readonly version: string | null
   readonly description: string | null
+  readonly release: ReleaseArchive | null
+  readonly releases: readonly ReleaseArchive[]
+  readonly installSource: 'release' | 'source' | null
   readonly validBundle: boolean
   readonly reason: string | null
   readonly requiresBuildApproval: boolean
+}
+
+interface ReleaseArchive {
+  readonly tag: string
+  readonly version: string | null
 }
 
 interface InstallResult {
@@ -55,7 +63,13 @@ interface InstalledPlugin {
 
 interface PluginActionResult { readonly restartAvailable: boolean }
 
-interface ApiError { readonly error?: { readonly message?: string } }
+interface ApiError { readonly error?: { readonly code?: string; readonly message?: string } }
+
+class MarketplaceRequestError extends Error {
+  constructor(readonly code: string | undefined, message: string) {
+    super(message)
+  }
+}
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`/dsh-plugin-installer/api${path}`, {
@@ -64,7 +78,7 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
     credentials: 'same-origin',
   })
   const body = await response.json() as T & ApiError
-  if (!response.ok) throw new Error(body.error?.message ?? `Request failed (${response.status})`)
+  if (!response.ok) throw new MarketplaceRequestError(body.error?.code, body.error?.message ?? `Request failed (${response.status})`)
   return body
 }
 
@@ -108,16 +122,19 @@ function writeCatalogCache(query: string, plugins: Repository[]): void {
   catalogCache.set(normalized, { fetchedAt: now, plugins })
 }
 
-/** Marketplace UI: one toolbar, one inline review panel and a compact repository list. */
+/** Marketplace UI: direct installation from a compact repository list. */
 export function PluginMarketplaceSettingsTab({ t }: SettingsProps): ReactNode {
   const [snapshot, setSnapshot] = useState<StateSnapshot | null>(null)
   const [plugins, setPlugins] = useState<readonly Repository[]>([])
   const [query, setQuery] = useState('')
   const [selectedProfile, setSelectedProfile] = useState('')
-  const [candidate, setCandidate] = useState<Candidate | null>(null)
+  const [selectedRelease, setSelectedRelease] = useState<Record<string, string>>({})
+  const [releaseChoices, setReleaseChoices] = useState<Record<string, readonly ReleaseArchive[]>>({})
+  const [showReleaseChoices, setShowReleaseChoices] = useState<Record<string, boolean>>({})
+  const [sourceConsent, setSourceConsent] = useState<Record<string, boolean>>({})
+  const [sourceBuildAllowed, setSourceBuildAllowed] = useState<Record<string, boolean>>({})
   const [loading, setLoading] = useState(true)
-  const [working, setWorking] = useState(false)
-  const [allowBuild, setAllowBuild] = useState(false)
+  const [action, setAction] = useState<string | null>(null)
   const [message, setMessage] = useState<{ kind: 'error' | 'success'; text: string } | null>(null)
   const [restartAvailable, setRestartAvailable] = useState(false)
   const [newProfile, setNewProfile] = useState('')
@@ -154,83 +171,110 @@ export function PluginMarketplaceSettingsTab({ t }: SettingsProps): ReactNode {
   const visiblePlugins = useMemo(() => sortCatalog(plugins, sortBy, sortDirection), [plugins, sortBy, sortDirection])
   const updatableCount = selectedSummary?.installedPlugins.filter(plugin => plugin.updateStatus === 'available').length ?? 0
 
-  const inspect = async (repository: Repository): Promise<void> => {
-    setWorking(true)
-    setCandidate(null)
-    setAllowBuild(false)
+  const actionIs = (value: string): boolean => action === value
+  const isWorking = action !== null
+
+  const install = async (repository: Repository): Promise<void> => {
+    const actionKey = `install:${repository.fullName}`
+    if (action !== null) return
+    setAction(actionKey)
     setRestartAvailable(false)
     setMessage(null)
     try {
-      const result = await api<{ plugin: Candidate }>(`/plugin/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.name)}`)
-      setCandidate(result.plugin)
+      const releaseTag = selectedRelease[repository.fullName]
+      const result = await api<InstallResult>('/install', {
+        method: 'POST',
+        body: JSON.stringify({
+          profile: selectedProfile,
+          owner: repository.owner,
+          repository: repository.name,
+          ...releaseTag === undefined ? {} : { releaseTag },
+          ...sourceBuildAllowed[repository.fullName] === true ? { allowBuild: true } : {},
+        }),
+      })
+      await load(query, true)
+      setMessage({ kind: 'success', text: result.installed.installSource === 'source' ? t('installedFromSource') : t('installed') })
+      setRestartAvailable(result.restartAvailable)
     } catch (error) {
-      setMessage({ kind: 'error', text: error instanceof Error ? error.message : t('installFailed') })
+      const text = error instanceof Error ? error.message : t('installFailed')
+      if (error instanceof MarketplaceRequestError && error.code === 'build-approval-required') {
+        setMessage(null)
+        setSourceConsent(current => ({ ...current, [repository.fullName]: true }))
+      } else {
+        setMessage({ kind: 'error', text })
+      }
     } finally {
-      setWorking(false)
+      setAction(null)
     }
   }
 
-  const install = async (): Promise<void> => {
-    if (candidate === null || !candidate.validBundle) return
-    setWorking(true)
-    setMessage(null)
-    setRestartAvailable(false)
+  const loadReleaseChoices = async (repository: Repository): Promise<void> => {
+    const key = repository.fullName
+    if (action !== null) return
+    setShowReleaseChoices(current => ({ ...current, [key]: !current[key] }))
+    if (releaseChoices[key] !== undefined) return
+    const actionKey = `versions:${key}`
+    setAction(actionKey)
     try {
-      const result = await api<InstallResult>('/install', {
-        method: 'POST',
-        body: JSON.stringify({ profile: selectedProfile, owner: candidate.repository.owner, repository: candidate.repository.name, allowBuild }),
-      })
-      await load(query, true)
-      setMessage({ kind: 'success', text: t('installed') })
-      setRestartAvailable(result.restartAvailable)
-      setCandidate(null)
+      const result = await api<{ plugin: Candidate }>(`/plugin/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.name)}`)
+      if (!result.plugin.validBundle || result.plugin.installSource !== 'release' || result.plugin.releases.length === 0) {
+        setMessage({ kind: 'error', text: result.plugin.reason ?? t('releaseChoicesUnavailable') })
+        setReleaseChoices(current => ({ ...current, [key]: [] }))
+        return
+      }
+      setReleaseChoices(current => ({ ...current, [key]: result.plugin.releases }))
+      setSelectedRelease(current => current[key] === undefined && result.plugin.release !== null
+        ? { ...current, [key]: result.plugin.release.tag }
+        : current)
     } catch (error) {
-      setMessage({ kind: 'error', text: error instanceof Error ? error.message : t('installFailed') })
+      setMessage({ kind: 'error', text: error instanceof Error ? error.message : t('releaseChoicesUnavailable') })
     } finally {
-      setWorking(false)
+      setAction(null)
     }
   }
 
   const openProfile = async (): Promise<void> => {
     if (selectedSummary?.webCapable !== true) return
-    setWorking(true)
+    setAction('open-profile')
     setMessage(null)
     try {
       const result = await api<{ url: string }>('/switch', { method: 'POST', body: JSON.stringify({ profile: selectedProfile }) })
       window.location.assign(result.url)
     } catch (error) {
       setMessage({ kind: 'error', text: error instanceof Error ? error.message : t('profileFailed') })
-      setWorking(false)
+      setAction(null)
     }
   }
 
   const createProfile = async (): Promise<void> => {
     if (newProfile.trim().length === 0) return
-    setWorking(true)
+    setAction('create-profile')
     setMessage(null)
     try {
       const result = await api<{ url: string }>('/profiles', { method: 'POST', body: JSON.stringify({ name: newProfile.trim() }) })
       window.location.assign(result.url)
     } catch (error) {
       setMessage({ kind: 'error', text: error instanceof Error ? error.message : t('profileFailed') })
-      setWorking(false)
+      setAction(null)
     }
   }
 
   const restartDsh = async (): Promise<void> => {
-    setWorking(true)
+    setAction('restart')
     setMessage(null)
     try {
       const result = await api<{ url: string }>('/restart', { method: 'POST', body: JSON.stringify({ profile: selectedProfile }) })
       window.location.assign(result.url)
     } catch (error) {
       setMessage({ kind: 'error', text: error instanceof Error ? error.message : t('profileFailed') })
-      setWorking(false)
+      setAction(null)
     }
   }
 
   const updatePlugin = async (plugin: InstalledPlugin): Promise<void> => {
-    setWorking(true)
+    const actionKey = `update:${plugin.packageName}`
+    if (action !== null) return
+    setAction(actionKey)
     setMessage(null)
     setRestartAvailable(false)
     try {
@@ -244,13 +288,15 @@ export function PluginMarketplaceSettingsTab({ t }: SettingsProps): ReactNode {
     } catch (error) {
       setMessage({ kind: 'error', text: error instanceof Error ? error.message : t('updateFailed') })
     } finally {
-      setWorking(false)
+      setAction(null)
     }
   }
 
   const removePlugin = async (plugin: InstalledPlugin): Promise<void> => {
     if (!window.confirm(`${t('removeConfirm')}\n\n${plugin.packageName}`)) return
-    setWorking(true)
+    const actionKey = `remove:${plugin.packageName}`
+    if (action !== null) return
+    setAction(actionKey)
     setMessage(null)
     setRestartAvailable(false)
     try {
@@ -264,7 +310,7 @@ export function PluginMarketplaceSettingsTab({ t }: SettingsProps): ReactNode {
     } catch (error) {
       setMessage({ kind: 'error', text: error instanceof Error ? error.message : t('removeFailed') })
     } finally {
-      setWorking(false)
+      setAction(null)
     }
   }
 
@@ -275,20 +321,20 @@ export function PluginMarketplaceSettingsTab({ t }: SettingsProps): ReactNode {
   }
 
   return (
-    <div className={css.root} aria-busy={loading || working}>
+    <div className={css.root} aria-busy={loading || isWorking}>
       <section className={css.profileBar} aria-label={t('currentProfile')}>
         <label>
           <span className={css.visuallyHidden}>{t('currentProfile')}</span>
-          <select value={selectedProfile} onChange={event => setSelectedProfile(event.currentTarget.value)} disabled={profiles.length === 0 || working}>
+          <select value={selectedProfile} onChange={event => setSelectedProfile(event.currentTarget.value)} disabled={profiles.length === 0 || isWorking}>
             {profiles.map(profile => <option key={profile.name} value={profile.name}>{profile.name}</option>)}
           </select>
         </label>
-        <button type="button" className={css.secondaryButton} disabled={working || selectedSummary?.webCapable !== true} onClick={() => void openProfile()}>{t('openProfile')}</button>
+        <button type="button" className={css.secondaryButton} disabled={isWorking || selectedSummary?.webCapable !== true} onClick={() => void openProfile()}>{actionIs('open-profile') ? t('openingProfile') : t('openProfile')}</button>
         <label className={css.newProfile}>
           <span className={css.newProfileLabel}>{t('newProfile')}</span>
-          <input value={newProfile} placeholder={t('newProfilePlaceholder')} onChange={event => setNewProfile(event.currentTarget.value)} disabled={working} />
+          <input value={newProfile} placeholder={t('newProfilePlaceholder')} onChange={event => setNewProfile(event.currentTarget.value)} disabled={isWorking} />
         </label>
-        <button type="button" className={css.secondaryButton} disabled={working || newProfile.trim().length === 0} onClick={() => void createProfile()}>{t('createAndOpen')}</button>
+        <button type="button" className={css.secondaryButton} disabled={isWorking || newProfile.trim().length === 0} onClick={() => void createProfile()}>{actionIs('create-profile') ? t('creatingProfile') : t('createAndOpen')}</button>
       </section>
 
       <form className={css.search} onSubmit={event => { event.preventDefault(); void load(query, false, true) }}>
@@ -298,7 +344,7 @@ export function PluginMarketplaceSettingsTab({ t }: SettingsProps): ReactNode {
           value={sortBy}
           aria-label={t('sort')}
           title={t('sort')}
-          disabled={working || plugins.length === 0}
+          disabled={isWorking || plugins.length === 0}
           onChange={event => setSortBy(event.currentTarget.value as CatalogSortKey)}
         >
           <option value="updated">{t('sortUpdated')}</option>
@@ -308,20 +354,20 @@ export function PluginMarketplaceSettingsTab({ t }: SettingsProps): ReactNode {
         <button
           type="button"
           className={css.sortDirection}
-          disabled={working || plugins.length === 0}
+          disabled={isWorking || plugins.length === 0}
           onClick={() => setSortDirection(direction => direction === 'asc' ? 'desc' : 'asc')}
           aria-label={sortDirection === 'asc' ? t('sortToggleToDesc') : t('sortToggleToAsc')}
           title={sortDirection === 'asc' ? t('sortAsc') : t('sortDesc')}
         >
           <span aria-hidden="true">{sortDirection === 'asc' ? '↑' : '↓'}</span>
         </button>
-        <button type="submit" className={css.secondaryButton} disabled={loading || working}>{t('refresh')}</button>
+        <button type="submit" className={css.secondaryButton} disabled={loading || isWorking}>{t('refresh')}</button>
       </form>
 
       {message !== null ? <p className={message.kind === 'error' ? css.error : css.success} role={message.kind === 'error' ? 'alert' : 'status'}>{message.text}</p> : null}
       {message?.kind === 'success' ? (
         restartAvailable
-          ? <button type="button" className={css.primaryButton} disabled={working} onClick={() => void restartDsh()}>{t('restartNow')}</button>
+          ? <button type="button" className={css.primaryButton} disabled={isWorking} onClick={() => void restartDsh()}>{actionIs('restart') ? t('restarting') : t('restartNow')}</button>
           : <p className={css.status}>{t('restartUnavailable')}</p>
       ) : null}
       {loading ? <p className={css.status}>{t('loading')}</p> : null}
@@ -346,9 +392,9 @@ export function PluginMarketplaceSettingsTab({ t }: SettingsProps): ReactNode {
                 </div>
                 <div className={css.rowActions}>
                   {plugin.updateStatus === 'available'
-                    ? <button type="button" className={css.primaryButton} disabled={working} onClick={() => void updatePlugin(plugin)}>{working ? t('updating') : t('update')}</button>
+                    ? <button type="button" className={css.primaryButton} disabled={isWorking} onClick={() => void updatePlugin(plugin)}>{actionIs(`update:${plugin.packageName}`) ? t('updating') : t('update')}</button>
                     : <span className={css.installedTag}>{plugin.updateStatus === 'up-to-date' ? t('upToDate') : t('updateUnknown')}</span>}
-                  <button type="button" className={css.secondaryButton} disabled={working} onClick={() => void removePlugin(plugin)}>{working ? t('removing') : t('remove')}</button>
+                  <button type="button" className={css.secondaryButton} disabled={isWorking} onClick={() => void removePlugin(plugin)}>{actionIs(`remove:${plugin.packageName}`) ? t('removing') : t('remove')}</button>
                 </div>
               </li>
             ))}
@@ -356,48 +402,49 @@ export function PluginMarketplaceSettingsTab({ t }: SettingsProps): ReactNode {
         </details>
       ) : null}
 
-      {candidate !== null ? (
-        <section className={css.review} aria-live="polite">
-          <div className={css.reviewHeading}>
-            <div>
-              <strong>{candidate.repository.fullName}</strong>
-              <p>{candidate.description ?? t('noDescription')}</p>
-            </div>
-            <button type="button" className={css.textButton} disabled={working} onClick={() => setCandidate(null)}>{t('close')}</button>
-          </div>
-          {candidate.validBundle ? (
-            <>
-              <dl className={css.details}>
-                <div><dt>{t('bundleVersion')}</dt><dd>{candidate.version ?? '—'}</dd></div>
-                <div><dt>{t('source')}</dt><dd>{t('sourceGithub')}</dd></div>
-              </dl>
-              {candidate.requiresBuildApproval ? (
-                <label className={css.permission}><input type="checkbox" checked={allowBuild} onChange={event => setAllowBuild(event.currentTarget.checked)} disabled={working} /><span>{t('buildPermission')}</span></label>
-              ) : null}
-              <div className={css.reviewActions}>
-                <button type="button" className={css.primaryButton} disabled={working || (candidate.requiresBuildApproval && !allowBuild) || selectedProfile.length === 0} onClick={() => void install()}>{working ? t('installing') : t('install')}</button>
-                <a href={candidate.repository.url} target="_blank" rel="noreferrer">{t('viewRepository')}</a>
-              </div>
-            </>
-          ) : <p className={css.error}>{candidate.reason ?? t('invalidBundle')}</p>}
-        </section>
-      ) : null}
-
-      {!loading && candidate === null && visiblePlugins.length === 0 ? <p className={css.status}>{t('empty')}</p> : null}
-      {candidate === null && visiblePlugins.length > 0 ? (
+      {!loading && visiblePlugins.length === 0 ? <p className={css.status}>{t('empty')}</p> : null}
+      {visiblePlugins.length > 0 ? (
         <section className={css.catalog} aria-label={t('tab')}>
           <ul className={css.rows}>
             {visiblePlugins.map(plugin => (
-              <li key={plugin.fullName} className={css.row}>
-                <div className={css.rowMain}>
-                  <a href={plugin.url} target="_blank" rel="noreferrer" className={css.repository}>{plugin.fullName}</a>
-                  <p>{plugin.description ?? t('noDescription')}</p>
-                  <span>{t('stars')} {plugin.stars} · {t('updated')} {updated(plugin.updatedAt, t('dateLocale'))}{plugin.language === null ? '' : ` · ${plugin.language}`}</span>
-                </div>
-                {isInstalled(plugin)
-                  ? <span className={css.installedTag}>{t('installedPlugin')}</span>
-                  : <button type="button" className={css.secondaryButton} disabled={working} onClick={() => void inspect(plugin)}>{working ? t('inspecting') : t('install')}</button>}
-              </li>
+              <Fragment key={plugin.fullName}>
+                <li className={css.row}>
+                  <div className={css.rowMain}>
+                    <a href={plugin.url} target="_blank" rel="noreferrer" className={css.repository}>{plugin.fullName}</a>
+                    <p>{plugin.description ?? t('noDescription')}</p>
+                    <span>{t('stars')} {plugin.stars} · {t('updated')} {updated(plugin.updatedAt, t('dateLocale'))}{plugin.language === null ? '' : ` · ${plugin.language}`}</span>
+                  </div>
+                  <div className={css.rowActions}>
+                    {isInstalled(plugin)
+                      ? <span className={css.installedTag}>{t('installedPlugin')}</span>
+                      : <button type="button" className={css.secondaryButton} disabled={isWorking || selectedProfile.length === 0} onClick={() => void install(plugin)}>{actionIs(`install:${plugin.fullName}`) ? t('installing') : t('install')}</button>}
+                    {!isInstalled(plugin) ? <button type="button" className={css.textButton} disabled={isWorking} onClick={() => void loadReleaseChoices(plugin)}>{actionIs(`versions:${plugin.fullName}`) ? t('loadingVersions') : t('chooseVersion')}</button> : null}
+                  </div>
+                </li>
+                {showReleaseChoices[plugin.fullName] === true ? (
+                  <li className={css.versionRow}>
+                    {releaseChoices[plugin.fullName] === undefined
+                      ? <span className={css.status}>{t('loadingVersions')}</span>
+                    : (releaseChoices[plugin.fullName]?.length ?? 0) === 0
+                        ? <span className={css.status}>{t('releaseChoicesUnavailable')}</span>
+                        : <label className={css.versionPicker}>
+                            <span>{t('installVersion')}</span>
+                            <select value={selectedRelease[plugin.fullName] ?? ''} disabled={isWorking} onChange={event => setSelectedRelease(current => ({ ...current, [plugin.fullName]: event.currentTarget.value }))}>
+                              {(releaseChoices[plugin.fullName] ?? []).map(release => <option key={release.tag} value={release.tag}>{release.tag}</option>)}
+                            </select>
+                          </label>}
+                  </li>
+                ) : null}
+                {sourceConsent[plugin.fullName] === true ? (
+                  <li className={css.versionRow}>
+                    <label className={css.sourceApproval}>
+                      <input type="checkbox" checked={sourceBuildAllowed[plugin.fullName] === true} disabled={isWorking} onChange={event => setSourceBuildAllowed(current => ({ ...current, [plugin.fullName]: event.currentTarget.checked }))} />
+                      <span>{t('sourceBuildApproval')}</span>
+                      <button type="button" className={css.primaryButton} disabled={isWorking || sourceBuildAllowed[plugin.fullName] !== true} onClick={() => void install(plugin)}>{actionIs(`install:${plugin.fullName}`) ? t('installing') : t('install')}</button>
+                    </label>
+                  </li>
+                ) : null}
+              </Fragment>
             ))}
           </ul>
         </section>

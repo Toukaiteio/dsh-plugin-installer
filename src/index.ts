@@ -10,13 +10,15 @@ import type {} from '@deepseek-ai/dsh-host-webserver'
 import { parseDocument } from 'yaml'
 import {
   type GitHubRepository,
+  type GitHubReleaseArchive,
   type InstalledPlugin,
   type PluginCandidate,
   type ProfileSummary,
   UserFacingError,
   githubInstallSpec,
-  githubReleaseArchive,
+  githubReleaseArchives,
   isProfileName,
+  isReleaseTag,
   isRepositorySegment,
   normalizeCatalogQuery,
   parseDshBundleManifest,
@@ -65,11 +67,6 @@ interface GitHubRepoResponse {
   language: string | null
 }
 
-interface GitHubReleaseResponse {
-  tag_name: unknown
-  assets: unknown
-}
-
 interface CommandResult { readonly output: string }
 
 /** Web host half: GitHub discovery, explicit permission gates and profile launch. */
@@ -86,7 +83,7 @@ class MarketplaceRuntime {
   private readonly profilesRoot: string
   private readonly currentProfile: string
   private readonly searchCache = new Map<string, { expiresAt: number; value: GitHubRepository[] }>()
-  private readonly releaseCache = new Map<string, { expiresAt: number; value: Promise<ReturnType<typeof githubReleaseArchive>> }>()
+  private readonly releaseCache = new Map<string, { expiresAt: number; value: Promise<readonly GitHubReleaseArchive[]> }>()
   private readonly commitCache = new Map<string, { expiresAt: number; value: Promise<string | null> }>()
 
   constructor(private readonly ctx: Context) {
@@ -189,7 +186,7 @@ class MarketplaceRuntime {
     this.searchCache.set(query, { value, expiresAt: now + CATALOG_CACHE_TTL_MS })
   }
 
-  private async inspect(owner: string, repository: string): Promise<PluginCandidate> {
+  private async inspect(owner: string, repository: string, releaseTag?: string): Promise<PluginCandidate> {
     if (!isRepositorySegment(owner) || !isRepositorySegment(repository)) {
       throw new UserFacingError('invalid-repository', 'GitHub 仓库地址不合法。')
     }
@@ -203,10 +200,13 @@ class MarketplaceRuntime {
       if (error instanceof UserFacingError && error.status !== 404) throw error
     }
     if (parsed === null) {
-      return { repository: repo, packageName: null, version: null, description: null, installSpec: null, release: null, validBundle: false, reason: '仓库根目录没有声明 dsh.bundle.patch，不能作为 DSH bundle 安装。', requiresBuildApproval: false }
+      return { repository: repo, packageName: null, version: null, description: null, installSpec: null, release: null, releases: [], installSource: null, validBundle: false, reason: '仓库根目录没有声明 dsh.bundle.patch，不能作为 DSH bundle 安装。', requiresBuildApproval: false }
     }
-    const release = await this.latestRelease(owner, repository, parsed.name)
-    if (release !== null && (parsed.version === null || release.version === parsed.version)) {
+    const releases = await this.releaseArchives(owner, repository, parsed.name)
+    const release = releaseTag === undefined
+      ? releases.find(item => item.version === parsed.version && !item.prerelease) ?? releases.find(item => !item.prerelease) ?? releases[0] ?? null
+      : releases.find(item => item.tag === releaseTag) ?? null
+    if (release !== null) {
       return {
         repository: repo,
         packageName: parsed.name,
@@ -214,17 +214,25 @@ class MarketplaceRuntime {
         description: parsed.description ?? repo.description,
         installSpec: release.downloadUrl,
         release,
+        releases,
+        installSource: 'release',
         validBundle: true,
         reason: null,
         // A release archive is already built. `prepare` only affects Git installs.
         requiresBuildApproval: false,
       }
     }
+    if (releaseTag !== undefined) {
+      return { repository: repo, packageName: parsed.name, version: parsed.version, description: parsed.description ?? repo.description, installSpec: null, release: null, releases, installSource: null, validBundle: false, reason: '所选 GitHub Release 版本不可用或缺少匹配的安装包。', requiresBuildApproval: false }
+    }
     const commit = await this.latestCommit(owner, repository)
     if (commit === null) throw new UserFacingError('github-error', '无法解析该仓库的当前提交。', 502)
     const sourceReady = parsed.entry !== null && await this.sourceEntryExists(owner, repository, commit, parsed.entry)
     if (!sourceReady) {
-      return { repository: repo, packageName: parsed.name, version: parsed.version, description: parsed.description ?? repo.description, installSpec: null, release: null, validBundle: false, reason: '该仓库没有与 package.json 版本匹配的 GitHub Release 安装包，且源码中缺少已构建的入口文件，无法安全安装。', requiresBuildApproval: false }
+      const reason = parsed.entry === null
+        ? '该仓库没有可安装的 GitHub Release，且 package.json 未声明可验证的 JavaScript 入口文件，无法安全安装。'
+        : `该仓库没有可安装的 GitHub Release，且源码提交中缺少入口文件 ${parsed.entry}，无法安全安装。`
+      return { repository: repo, packageName: parsed.name, version: parsed.version, description: parsed.description ?? repo.description, installSpec: null, release: null, releases, installSource: null, validBundle: false, reason, requiresBuildApproval: false }
     }
     return {
       repository: repo,
@@ -233,6 +241,8 @@ class MarketplaceRuntime {
       description: parsed.description ?? repo.description,
       installSpec: githubInstallSpec(owner, repository, commit),
       release: null,
+      releases,
+      installSource: 'source',
       validBundle: true,
       reason: null,
       requiresBuildApproval: parsed.prepareScript !== null,
@@ -244,9 +254,11 @@ class MarketplaceRuntime {
     const profile = input.profile
     const owner = input.owner
     const repository = input.repository
+    const releaseTag = input.releaseTag
     if (!isProfileName(profile) || !this.profileExists(profile)) throw new UserFacingError('unknown-profile', '请选择一个已有 Profile。')
     if (!isRepositorySegment(owner) || !isRepositorySegment(repository)) throw new UserFacingError('invalid-repository', 'GitHub 仓库地址不合法。')
-    const candidate = await this.inspect(owner, repository)
+    if (releaseTag !== undefined && (typeof releaseTag !== 'string' || !isReleaseTag(releaseTag))) throw new UserFacingError('invalid-release', '所选 GitHub Release 版本不合法。')
+    const candidate = await this.inspect(owner, repository, releaseTag)
     if (!candidate.validBundle || candidate.installSpec === null) throw new UserFacingError('not-a-bundle', candidate.reason ?? '该仓库不是 DSH bundle。')
     if (candidate.requiresBuildApproval && input.allowBuild !== true) {
       throw new UserFacingError('build-approval-required', '该插件含 prepare 安装脚本；勾选执行授权后才能继续。', 409)
@@ -470,8 +482,9 @@ class MarketplaceRuntime {
 
   private async checkForUpdate(profile: string, plugin: InstalledPlugin): Promise<InstalledPlugin> {
     if (!this.packageEntryExists(profile, plugin)) return { ...plugin, updateStatus: 'available' }
-    const latestRelease = await this.latestRelease(plugin.owner, plugin.repositoryName, plugin.packageName)
-    if (latestRelease !== null && plugin.installedVersion !== null && latestRelease.version !== null) {
+    const releases = await this.releaseArchives(plugin.owner, plugin.repositoryName, plugin.packageName)
+    const latestRelease = releases.find(item => !item.prerelease) ?? releases[0]
+    if (latestRelease !== undefined && plugin.installedVersion !== null && latestRelease.version !== null) {
       return { ...plugin, updateStatus: plugin.installedVersion === latestRelease.version ? 'up-to-date' : 'available' }
     }
     if (plugin.installedCommit === null) return plugin
@@ -480,13 +493,13 @@ class MarketplaceRuntime {
     return { ...plugin, updateStatus: sameCommit(plugin.installedCommit, latestCommit) ? 'up-to-date' : 'available' }
   }
 
-  private async latestRelease(owner: string, repository: string, packageName: string): Promise<ReturnType<typeof githubReleaseArchive>> {
+  private async releaseArchives(owner: string, repository: string, packageName: string): Promise<readonly GitHubReleaseArchive[]> {
     const key = `${owner}/${repository}/${packageName}`.toLocaleLowerCase()
     const cached = this.releaseCache.get(key)
     if (cached !== undefined && cached.expiresAt > Date.now()) return await cached.value
-    const value = this.githubJson<GitHubReleaseResponse>(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repository)}/releases/latest`)
-      .then(release => githubReleaseArchive(packageName, release))
-      .catch(() => null)
+    const value = this.githubJson<unknown>(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repository)}/releases?per_page=20`)
+      .then(releases => githubReleaseArchives(packageName, releases))
+      .catch(() => [])
     this.releaseCache.set(key, { value, expiresAt: Date.now() + 5 * 60_000 })
     return await value
   }

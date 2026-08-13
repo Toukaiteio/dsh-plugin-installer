@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { githubInstallSpec, githubReleaseArchive, isPackageEntryPath, isProfileName, normalizeCatalogQuery, parseDshBundleManifest, sortCatalog } from '../src/marketplace.js'
+import { githubInstallSpec, githubReleaseArchive, githubReleaseArchives, isPackageEntryPath, isProfileName, isReleaseTag, normalizeCatalogQuery, parseDshBundleManifest, sortCatalog } from '../src/marketplace.js'
 
 describe('DSH bundle manifest validation', () => {
   it('accepts a distributable DSH bundle and reports its install script', () => {
@@ -56,11 +56,23 @@ describe('input constraints', () => {
       downloadUrl: 'https://github.com/example/release.tgz',
       sha256: 'a'.repeat(64),
       size: 1024,
+      prerelease: false,
     })
     expect(githubReleaseArchive('dsh-effort-tweak', {
       tag_name: 'v0.1.0',
       assets: [{ name: 'dsh-effort-tweak-0.1.0.tgz', browser_download_url: 'http://example/release.tgz' }],
     })).toBeNull()
+  })
+
+  it('keeps valid release archives in API order for version selection', () => {
+    const releases = githubReleaseArchives('dsh-effort-tweak', [
+      { tag_name: 'v0.2.0', assets: [{ name: 'dsh-effort-tweak-0.2.0.tgz', browser_download_url: 'https://example/0.2.0.tgz' }] },
+      { tag_name: 'v0.1.0', assets: [{ name: 'dsh-effort-tweak-0.1.0.tgz', browser_download_url: 'https://example/0.1.0.tgz' }] },
+      { tag_name: 'draft', assets: [{ name: 'dsh-effort-tweak-draft.tgz', browser_download_url: 'https://example/draft.tgz' }] },
+    ])
+    expect(releases.map(item => item.tag)).toEqual(['v0.2.0', 'v0.1.0'])
+    expect(isReleaseTag('v0.1.0')).toBe(true)
+    expect(isReleaseTag('../v0.1.0')).toBe(false)
   })
 
   it('normalizes catalog queries before using them as cache keys', () => {
