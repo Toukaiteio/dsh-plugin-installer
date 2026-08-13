@@ -1,0 +1,37 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+
+# Test and coverage output
+coverage/
+test-results/
+playwright-report/
+*.lcov
+
+# Build and tool caches
+.cache/
+.vite/
+.turbo/
+*.tsbuildinfo
+*.log
+pnpm-debug.log*
+
+# Local DSH state
+.dsh/
+
+# Generated local release archives
+dsh-plugin-installer-*.tgz
+
+# Operating-system and editor files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/
+

@@ -1,0 +1,36 @@
+export declare const zh: {
+    readonly tab: "插件市场";
+    readonly currentProfile: "Profile";
+    readonly openProfile: "打开 Profile";
+    readonly newProfile: "新建 Web Profile";
+    readonly newProfilePlaceholder: "例如 work";
+    readonly createAndOpen: "创建并打开";
+    readonly search: "搜索仓库名称或描述";
+    readonly refresh: "刷新列表";
+    readonly loading: "正在加载插件列表…";
+    readonly loadFailed: "插件列表暂时不可用。";
+    readonly retry: "重试";
+    readonly empty: "没有找到匹配的插件。";
+    readonly install: "安装";
+    readonly inspecting: "正在检查 DSH bundle…";
+    readonly installedPlugin: "已安装";
+    readonly invalidBundle: "不是可安装的 DSH bundle";
+    readonly bundleVersion: "版本";
+    readonly source: "来源";
+    readonly sourceGithub: "GitHub 仓库";
+    readonly buildPermission: "此仓库包含 prepare 安装脚本；我了解这会执行第三方代码，并允许为该插件授予构建权限。";
+    readonly installing: "正在安装…";
+    readonly installed: "安装完成。重启 DSH 后生效。";
+    readonly restartNow: "立即重启 DSH";
+    readonly restartUnavailable: "请重启目标 Profile 后生效。";
+    readonly installFailed: "安装未完成。";
+    readonly profileFailed: "Profile 操作未完成。";
+    readonly stars: "星标";
+    readonly updated: "更新于";
+    readonly viewRepository: "查看仓库";
+    readonly close: "收起";
+    readonly noDescription: "该仓库没有提供说明。";
+};
+export declare const en: Record<keyof typeof zh, string>;
+export type MarketplaceLocaleKey = keyof typeof zh;
+//# sourceMappingURL=locales.d.ts.map
