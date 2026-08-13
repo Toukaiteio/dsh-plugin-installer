@@ -16,11 +16,11 @@ The project intentionally keeps the interface compact and newcomer-friendly. It 
 
 - Online discovery from GitHub `dsh-plugin` and `dsh` topics.
 - Root `package.json` validation for `dsh.bundle.patch` before installation.
-- Commit-pinned GitHub installs using `github:owner/repository#commit`.
-- Explicit confirmation before enabling a third-party `prepare` install script.
+- Verified GitHub Release installs using the published `.tgz` build artifact whenever available; source installs are allowed only when the checked-in JavaScript entry exists.
+- Release archive SHA-256 verification when GitHub provides a digest.
 - Installation into a selected DSH Profile.
 - Installed-state detection from both GitHub dependency specs and package repository metadata.
-- Automatic update checks for GitHub plugins installed at pinned commits, plus in-page update and removal actions.
+- Automatic update checks for GitHub Release versions, plus in-page update and removal actions.
 - Interface copy and date formatting that follow the official DSH language preference.
 - Web Profile list, fast Profile opening, and Web Profile creation.
 - Restart guidance and a one-click restart action after installing into the active Profile.
@@ -72,11 +72,11 @@ bash ./install-dsh-plugin-installer.sh --profile work --no-start
 Build or download the package archive from the [latest GitHub Release](https://github.com/Toukaiteio/dsh-plugin-installer/releases), then add it to the Web Profile you use:
 
 ```bash
-dsh plugin --profile web add ./dsh-plugin-installer-0.1.6.tgz
+dsh plugin --profile web add ./dsh-plugin-installer-<version>.tgz
 dsh web
 ```
 
-To install directly from a GitHub revision after the repository has been published:
+For local development only, a source checkout can still be installed directly from a GitHub revision after the repository has been published. The checkout must already contain its built `lib/` directory:
 
 ```bash
 dsh plugin --profile web add github:Toukaiteio/dsh-plugin-installer#<commit>
@@ -89,23 +89,23 @@ Open **Settings → Plugins → Plugin marketplace** after the Web UI starts.
 
 The marketplace treats a GitHub topic as a discovery hint, not as a trust decision. When a user chooses **Install**, the host side:
 
-1. Reads the repository metadata and its default branch.
+1. Reads the repository metadata and the latest GitHub Release.
 2. Fetches the root `package.json`.
 3. Requires a valid `dsh.bundle.patch` declaration.
-4. Resolves the branch to a full commit SHA.
-5. Runs DSH's own plugin command with the pinned GitHub spec.
+4. Prefers a version-matching `<package-name>-<version>.tgz` Release asset, verifies its digest when available, and keeps it under `DSH_HOME/plugin-archives/` before installation.
+5. If no suitable Release exists, permits a commit-pinned source install only after confirming the package's declared JavaScript entry exists in that exact commit.
 
-Repositories with a `prepare` script are blocked until the user explicitly grants build permission. This is intentional: package installation may execute third-party code.
+The marketplace installs built Release archives when available, so a source repository's `prepare` script is not used in that path. The guarded source fallback remains subject to DSH/pnpm lifecycle-script behavior.
 
 ## Installed plugin management
 
 The marketplace follows the language selected in DSH **Settings → General → Language**. It also formats repository dates in that language.
 
-The **Installed plugins** section is scoped to the selected Profile. On page load, it compares every plugin installed from a pinned GitHub commit with the repository's latest default-branch commit:
+The **Installed plugins** section is scoped to the selected Profile. On page load, it compares marketplace-installed plugins with the repository's latest Release when one is available, otherwise with the current source commit:
 
-- **Update available** installs the current verified bundle at a newly pinned commit.
-- **Up to date** means the installed commit still matches the latest default-branch commit.
-- **Update status unavailable** is shown for registry/local installs or when GitHub cannot be reached; it never claims an update without a successful comparison.
+- **Update available** downloads the current verified Release archive.
+- **Up to date** means the installed package version matches the latest Release version.
+- **Update status unavailable** is shown when neither the Release nor source state can be checked; it never claims an update without a successful comparison.
 - **Remove** asks for confirmation, then uses DSH's own `plugin remove` command so the Profile bundle list is reconciled with the package state.
 
 After updating or removing a plugin from the active Web Profile, use **Restart DSH now** to apply the new bundle stack.

@@ -3,6 +3,7 @@ export interface DshBundleManifest {
     readonly version: string | null;
     readonly description: string | null;
     readonly patch: string;
+    readonly entry: string | null;
     readonly prepareScript: string | null;
 }
 export interface GitHubRepository {
@@ -25,9 +26,19 @@ export interface PluginCandidate {
     readonly version: string | null;
     readonly description: string | null;
     readonly installSpec: string | null;
+    readonly release: GitHubReleaseArchive | null;
     readonly validBundle: boolean;
     readonly reason: string | null;
     readonly requiresBuildApproval: boolean;
+}
+/** A verified package archive attached to the repository's latest GitHub Release. */
+export interface GitHubReleaseArchive {
+    readonly tag: string;
+    readonly version: string | null;
+    readonly name: string;
+    readonly downloadUrl: string;
+    readonly sha256: string | null;
+    readonly size: number | null;
 }
 export type PluginUpdateStatus = 'available' | 'up-to-date' | 'unknown';
 /** A direct, GitHub-backed DSH bundle installed in one Profile. */
@@ -57,6 +68,13 @@ export declare function isRepositorySegment(value: unknown): value is string;
 /** Extract only the fields that make a root package a DSH bundle. */
 export declare function parseDshBundleManifest(value: unknown): DshBundleManifest | null;
 export declare function githubInstallSpec(owner: string, repository: string, sha: string): string;
+/**
+ * Select the package archive for a bundle from a GitHub Release response.
+ * The marketplace installs release archives, never an unbuilt source checkout.
+ */
+export declare function githubReleaseArchive(packageName: string, value: unknown): GitHubReleaseArchive | null;
+/** Accept only a package-relative JavaScript entry that can be checked in GitHub Contents. */
+export declare function isPackageEntryPath(value: string): boolean;
 /** Normalize a catalog query so clients and the host share the same cache key. */
 export declare function normalizeCatalogQuery(query: string): string;
 /** Catalog sort keys offered by the marketplace UI. */

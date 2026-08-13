@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { githubInstallSpec, isProfileName, normalizeCatalogQuery, parseDshBundleManifest, sortCatalog } from '../src/marketplace.js'
+import { githubInstallSpec, githubReleaseArchive, isPackageEntryPath, isProfileName, normalizeCatalogQuery, parseDshBundleManifest, sortCatalog } from '../src/marketplace.js'
 
 describe('DSH bundle manifest validation', () => {
   it('accepts a distributable DSH bundle and reports its install script', () => {
@@ -14,6 +14,7 @@ describe('DSH bundle manifest validation', () => {
       version: '1.2.3',
       description: 'Example',
       patch: './cordis.patch.yml',
+      entry: null,
       prepareScript: 'pnpm build',
     })
   })
@@ -31,8 +32,35 @@ describe('input constraints', () => {
     expect(isProfileName('')).toBe(false)
   })
 
+  it('accepts only package-relative JavaScript entries for source installs', () => {
+    expect(isPackageEntryPath('./lib/index.js')).toBe(true)
+    expect(isPackageEntryPath('lib/index.mjs')).toBe(true)
+    expect(isPackageEntryPath('../outside.js')).toBe(false)
+    expect(isPackageEntryPath('./lib/index.ts')).toBe(false)
+  })
+
   it('pins GitHub installs to a commit', () => {
     expect(githubInstallSpec('deepseek-ai', 'deepseek-harness', '47f9438')).toBe('github:deepseek-ai/deepseek-harness#47f9438')
+  })
+
+  it('selects only the matching HTTPS release archive', () => {
+    expect(githubReleaseArchive('dsh-effort-tweak', {
+      tag_name: 'v0.1.0',
+      assets: [
+        { name: 'dsh-effort-tweak-0.1.0.tgz', browser_download_url: 'https://github.com/example/release.tgz', digest: 'sha256:' + 'a'.repeat(64), size: 1024 },
+      ],
+    })).toEqual({
+      tag: 'v0.1.0',
+      version: '0.1.0',
+      name: 'dsh-effort-tweak-0.1.0.tgz',
+      downloadUrl: 'https://github.com/example/release.tgz',
+      sha256: 'a'.repeat(64),
+      size: 1024,
+    })
+    expect(githubReleaseArchive('dsh-effort-tweak', {
+      tag_name: 'v0.1.0',
+      assets: [{ name: 'dsh-effort-tweak-0.1.0.tgz', browser_download_url: 'http://example/release.tgz' }],
+    })).toBeNull()
   })
 
   it('normalizes catalog queries before using them as cache keys', () => {

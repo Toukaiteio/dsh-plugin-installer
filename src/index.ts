@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process'
-import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { basename, dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -14,6 +15,7 @@ import {
   type ProfileSummary,
   UserFacingError,
   githubInstallSpec,
+  githubReleaseArchive,
   isProfileName,
   isRepositorySegment,
   normalizeCatalogQuery,
@@ -29,6 +31,8 @@ const API_PREFIX = `${ROUTE_PREFIX}/api`
 const CATALOG_CACHE_TTL_MS = 12 * 60_000
 /** Bound the number of distinct searches retained by one Web Profile process. */
 const CATALOG_CACHE_MAX_ENTRIES = 24
+/** Refuse unexpectedly large release packages before writing them to DSH_HOME. */
+const MAX_RELEASE_ARCHIVE_BYTES = 32 * 1024 * 1024
 const SELF_MANIFEST = JSON.parse(readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8')) as {
   name: string
 }
@@ -40,6 +44,7 @@ interface ProfilePackage {
 }
 
 interface InstalledPackageManifest {
+  main?: unknown
   version?: unknown
   repository?: unknown
   dsh?: { bundle?: { patch?: unknown } }
@@ -60,6 +65,11 @@ interface GitHubRepoResponse {
   language: string | null
 }
 
+interface GitHubReleaseResponse {
+  tag_name: unknown
+  assets: unknown
+}
+
 interface CommandResult { readonly output: string }
 
 /** Web host half: GitHub discovery, explicit permission gates and profile launch. */
@@ -76,7 +86,8 @@ class MarketplaceRuntime {
   private readonly profilesRoot: string
   private readonly currentProfile: string
   private readonly searchCache = new Map<string, { expiresAt: number; value: GitHubRepository[] }>()
-  private readonly updateCache = new Map<string, { expiresAt: number; value: Promise<string | null> }>()
+  private readonly releaseCache = new Map<string, { expiresAt: number; value: Promise<ReturnType<typeof githubReleaseArchive>> }>()
+  private readonly commitCache = new Map<string, { expiresAt: number; value: Promise<string | null> }>()
 
   constructor(private readonly ctx: Context) {
     this.profilesRoot = join(this.resolveDshHome(), 'profiles')
@@ -146,7 +157,7 @@ class MarketplaceRuntime {
       })
     return await Promise.all(profiles.map(async profile => ({
       ...profile,
-      installedPlugins: await Promise.all(profile.installedPlugins.map(plugin => this.checkForUpdate(plugin))),
+      installedPlugins: await Promise.all(profile.installedPlugins.map(plugin => this.checkForUpdate(profile.name, plugin))),
     }))).then(value => value.sort((a, b) => a.name.localeCompare(b.name)))
   }
 
@@ -192,15 +203,36 @@ class MarketplaceRuntime {
       if (error instanceof UserFacingError && error.status !== 404) throw error
     }
     if (parsed === null) {
-      return { repository: repo, packageName: null, version: null, description: null, installSpec: null, validBundle: false, reason: '仓库根目录没有声明 dsh.bundle.patch，不能作为 DSH bundle 安装。', requiresBuildApproval: false }
+      return { repository: repo, packageName: null, version: null, description: null, installSpec: null, release: null, validBundle: false, reason: '仓库根目录没有声明 dsh.bundle.patch，不能作为 DSH bundle 安装。', requiresBuildApproval: false }
     }
-    const commit = await this.githubJson<{ sha: string }>(`/repos/${owner}/${repository}/commits/${encodeURIComponent(repo.defaultBranch)}`)
+    const release = await this.latestRelease(owner, repository, parsed.name)
+    if (release !== null && (parsed.version === null || release.version === parsed.version)) {
+      return {
+        repository: repo,
+        packageName: parsed.name,
+        version: release.version ?? parsed.version,
+        description: parsed.description ?? repo.description,
+        installSpec: release.downloadUrl,
+        release,
+        validBundle: true,
+        reason: null,
+        // A release archive is already built. `prepare` only affects Git installs.
+        requiresBuildApproval: false,
+      }
+    }
+    const commit = await this.latestCommit(owner, repository)
+    if (commit === null) throw new UserFacingError('github-error', '无法解析该仓库的当前提交。', 502)
+    const sourceReady = parsed.entry !== null && await this.sourceEntryExists(owner, repository, commit, parsed.entry)
+    if (!sourceReady) {
+      return { repository: repo, packageName: parsed.name, version: parsed.version, description: parsed.description ?? repo.description, installSpec: null, release: null, validBundle: false, reason: '该仓库没有与 package.json 版本匹配的 GitHub Release 安装包，且源码中缺少已构建的入口文件，无法安全安装。', requiresBuildApproval: false }
+    }
     return {
       repository: repo,
       packageName: parsed.name,
       version: parsed.version,
       description: parsed.description ?? repo.description,
-      installSpec: githubInstallSpec(owner, repository, commit.sha),
+      installSpec: githubInstallSpec(owner, repository, commit),
+      release: null,
       validBundle: true,
       reason: null,
       requiresBuildApproval: parsed.prepareScript !== null,
@@ -220,7 +252,7 @@ class MarketplaceRuntime {
       throw new UserFacingError('build-approval-required', '该插件含 prepare 安装脚本；勾选执行授权后才能继续。', 409)
     }
     if (candidate.requiresBuildApproval && candidate.packageName !== null) this.allowBuild(profile, candidate.packageName)
-    const result = await this.runDsh(['plugin', '--profile', profile, 'add', candidate.installSpec])
+    const result = await this.runDsh(['plugin', '--profile', profile, 'add', await this.resolveInstallSpec(candidate)])
     return { installed: candidate, output: result.output, restartAvailable: profile === this.currentProfile && this.profileSupportsWeb(profile) }
   }
 
@@ -241,7 +273,7 @@ class MarketplaceRuntime {
     if (!candidate.validBundle || candidate.installSpec === null || candidate.packageName !== packageName) {
       throw new UserFacingError('not-a-bundle', '仓库当前版本不再是同名的 DSH bundle，无法更新。')
     }
-    const result = await this.runDsh(['plugin', '--profile', profile, 'add', candidate.installSpec])
+    const result = await this.runDsh(['plugin', '--profile', profile, 'add', await this.resolveInstallSpec(candidate)])
     return { updated: candidate, output: result.output, restartAvailable: profile === this.currentProfile && this.profileSupportsWeb(profile) }
   }
 
@@ -436,25 +468,91 @@ class MarketplaceRuntime {
     return this.installedPlugins(profile, manifest, bundles).find(plugin => plugin.packageName === packageName) ?? null
   }
 
-  private async checkForUpdate(plugin: InstalledPlugin): Promise<InstalledPlugin> {
+  private async checkForUpdate(profile: string, plugin: InstalledPlugin): Promise<InstalledPlugin> {
+    if (!this.packageEntryExists(profile, plugin)) return { ...plugin, updateStatus: 'available' }
+    const latestRelease = await this.latestRelease(plugin.owner, plugin.repositoryName, plugin.packageName)
+    if (latestRelease !== null && plugin.installedVersion !== null && latestRelease.version !== null) {
+      return { ...plugin, updateStatus: plugin.installedVersion === latestRelease.version ? 'up-to-date' : 'available' }
+    }
     if (plugin.installedCommit === null) return plugin
     const latestCommit = await this.latestCommit(plugin.owner, plugin.repositoryName)
     if (latestCommit === null) return plugin
-    return {
-      ...plugin,
-      updateStatus: sameCommit(plugin.installedCommit, latestCommit) ? 'up-to-date' : 'available',
-    }
+    return { ...plugin, updateStatus: sameCommit(plugin.installedCommit, latestCommit) ? 'up-to-date' : 'available' }
+  }
+
+  private async latestRelease(owner: string, repository: string, packageName: string): Promise<ReturnType<typeof githubReleaseArchive>> {
+    const key = `${owner}/${repository}/${packageName}`.toLocaleLowerCase()
+    const cached = this.releaseCache.get(key)
+    if (cached !== undefined && cached.expiresAt > Date.now()) return await cached.value
+    const value = this.githubJson<GitHubReleaseResponse>(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repository)}/releases/latest`)
+      .then(release => githubReleaseArchive(packageName, release))
+      .catch(() => null)
+    this.releaseCache.set(key, { value, expiresAt: Date.now() + 5 * 60_000 })
+    return await value
   }
 
   private async latestCommit(owner: string, repository: string): Promise<string | null> {
     const key = `${owner}/${repository}`.toLocaleLowerCase()
-    const cached = this.updateCache.get(key)
+    const cached = this.commitCache.get(key)
     if (cached !== undefined && cached.expiresAt > Date.now()) return await cached.value
     const value = this.githubJson<Array<{ sha?: unknown }>>(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repository)}/commits?per_page=1`)
       .then(commits => typeof commits[0]?.sha === 'string' && /^[0-9a-f]{7,64}$/i.test(commits[0].sha) ? commits[0].sha : null)
       .catch(() => null)
-    this.updateCache.set(key, { value, expiresAt: Date.now() + 5 * 60_000 })
+    this.commitCache.set(key, { value, expiresAt: Date.now() + 5 * 60_000 })
     return await value
+  }
+
+  private async sourceEntryExists(owner: string, repository: string, ref: string, entry: string): Promise<boolean> {
+    const path = entry.replace(/^\.\//, '')
+    try {
+      const file = await this.githubJson<{ type?: unknown }>(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repository)}/contents/${path.split('/').map(encodeURIComponent).join('/')}?ref=${encodeURIComponent(ref)}`)
+      return file.type === 'file'
+    } catch (error) {
+      if (error instanceof UserFacingError && error.status === 404) return false
+      throw error
+    }
+  }
+
+  private async resolveInstallSpec(candidate: PluginCandidate): Promise<string> {
+    return candidate.release === null ? candidate.installSpec ?? '' : await this.downloadReleaseArchive(candidate)
+  }
+
+  private async downloadReleaseArchive(candidate: PluginCandidate): Promise<string> {
+    const release = candidate.release
+    if (release === null || candidate.packageName === null) throw new UserFacingError('release-unavailable', '该插件没有可用的 GitHub Release 安装包。', 409)
+    if (release.size !== null && release.size > MAX_RELEASE_ARCHIVE_BYTES) {
+      throw new UserFacingError('release-too-large', '插件安装包超过允许大小，已取消下载。', 413)
+    }
+    let response: Response
+    try {
+      response = await fetch(release.downloadUrl, { headers: { 'User-Agent': 'dsh-plugin-installer' }, signal: AbortSignal.timeout(60_000) })
+    } catch {
+      throw new UserFacingError('release-unavailable', '无法下载 GitHub Release 安装包，请检查网络后重试。', 502)
+    }
+    if (!response.ok) throw new UserFacingError('release-unavailable', `GitHub Release 安装包下载失败（${response.status}）。`, 502)
+    const length = Number(response.headers.get('content-length'))
+    if (Number.isFinite(length) && length > MAX_RELEASE_ARCHIVE_BYTES) {
+      throw new UserFacingError('release-too-large', '插件安装包超过允许大小，已取消下载。', 413)
+    }
+    const archive = Buffer.from(await response.arrayBuffer())
+    if (archive.length === 0 || archive.length > MAX_RELEASE_ARCHIVE_BYTES) {
+      throw new UserFacingError('release-invalid', 'GitHub Release 安装包大小无效。', 502)
+    }
+    if (release.sha256 !== null) {
+      const actual = createHash('sha256').update(archive).digest('hex')
+      if (actual !== release.sha256) throw new UserFacingError('release-integrity', 'GitHub Release 安装包校验失败，已取消安装。', 502)
+    }
+    const directory = join(this.resolveDshHome(), 'plugin-archives', candidate.packageName.replace(/^@/, '').replace('/', '-'))
+    mkdirSync(directory, { recursive: true })
+    const path = join(directory, release.name)
+    writeFileSync(path, archive)
+    return path
+  }
+
+  private packageEntryExists(profile: string, plugin: InstalledPlugin): boolean {
+    const manifest = this.readInstalledPackage(profile, plugin.packageName)
+    if (manifest === null || typeof manifest.main !== 'string' || manifest.main.length === 0) return true
+    return existsSync(join(this.profilesRoot, profile, 'node_modules', ...plugin.packageName.split('/'), manifest.main))
   }
 
   private readInstalledPackage(profile: string, packageName: string): InstalledPackageManifest | null {

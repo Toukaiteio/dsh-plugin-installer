@@ -16,11 +16,11 @@ DSH Plugin Installer 会在官方 Web UI 的 **设置 → 插件** 中增加“�
 
 - 在线发现 GitHub `dsh-plugin` 和 `dsh` Topic 下的仓库。
 - 安装前验证根目录 `package.json` 是否声明 `dsh.bundle.patch`。
-- 使用 `github:owner/repository#commit` 固定到具体提交后安装。
-- 第三方仓库包含 `prepare` 安装脚本时，必须明确确认后才允许执行。
+- 优先使用 GitHub Release 中已构建的 `.tgz` 安装包；仅在已确认仓库提交了可加载入口时才允许源码安装。
+- GitHub 提供摘要时校验 Release 安装包的 SHA-256。
 - 安装到选中的 DSH Profile。
 - 通过 GitHub 依赖地址和包的 repository 元数据识别“已安装”状态。
-- 自动检查固定 GitHub 提交安装的插件更新，并提供页面内更新与删除操作。
+- 自动检查 GitHub Release 版本更新，并提供页面内更新与删除操作。
 - 文案和日期格式自动跟随官方 DSH 的语言偏好。
 - 列出 Web Profile，快速打开其他 Profile，也可以创建新的 Web Profile。
 - 安装到当前 Profile 后提示重启，并提供一键重启按钮。
@@ -72,11 +72,11 @@ bash ./install-dsh-plugin-installer.sh --profile work --no-start
 可以从[最新 GitHub Release](https://github.com/Toukaiteio/dsh-plugin-installer/releases) 下载压缩包，也可以自行构建，然后将它添加到正在使用的 Web Profile：
 
 ```bash
-dsh plugin --profile web add ./dsh-plugin-installer-0.1.6.tgz
+dsh plugin --profile web add ./dsh-plugin-installer-<版本>.tgz
 dsh web
 ```
 
-仓库发布后，也可以直接从 GitHub 的指定提交安装：
+仅用于本地开发时，也可以直接从 GitHub 的指定提交安装；此时源码仓库必须已经包含构建后的 `lib/` 目录：
 
 ```bash
 dsh plugin --profile web add github:Toukaiteio/dsh-plugin-installer#<commit>
@@ -89,23 +89,23 @@ dsh web
 
 GitHub Topic 只作为发现信号，不代表安全审核或官方背书。用户点击“安装”后，host 端会：
 
-1. 读取仓库元数据和默认分支。
+1. 读取仓库元数据和最新 GitHub Release。
 2. 读取仓库根目录的 `package.json`。
 3. 要求存在有效的 `dsh.bundle.patch` 声明。
-4. 将默认分支解析成完整 commit SHA。
-5. 调用 DSH 自己的插件命令，并使用固定后的 GitHub 地址安装。
+4. 优先使用 Release 中与版本匹配的 `<包名>-<版本>.tgz` 安装包；GitHub 提供摘要时校验内容，并将其保存在 `DSH_HOME/plugin-archives/` 后使用持久化本地路径安装。
+5. 没有合适 Release 时，仅在确认包所声明的 JavaScript 入口文件确实存在于该具体提交后，才允许使用固定 commit 的源码安装。
 
-包含 `prepare` 脚本的仓库会被拦截，直到用户明确授予构建权限。这是有意设计的，因为包安装过程可能执行第三方代码。
+有 Release 时，插件市场会安装已构建的 Release 安装包，不会把源码仓库的 `prepare` 作为市场构建步骤执行。受控的源码回退安装仍遵循 DSH/pnpm 对生命周期脚本的处理规则。
 
 ## 已安装插件管理
 
 插件市场会跟随 DSH **设置 → 通用设置 → 语言** 中选择的语言，并用该语言格式化仓库日期。
 
-**已安装插件** 区域对应当前选定的 Profile。页面打开时，会将每个以固定 GitHub commit 安装的插件与仓库默认分支的最新 commit 比较：
+**已安装插件** 区域对应当前选定的 Profile。页面打开时，会优先将市场安装的每个插件与仓库最新 Release 比较；没有 Release 时再比较当前源码提交：
 
-- **有可用更新**：会重新验证仓库，并以新的固定 commit 安装最新 bundle。
-- **已是最新**：已安装 commit 与默认分支最新 commit 一致。
-- **暂无法检查更新**：注册表/本地安装的插件，或 GitHub 无法访问时的保守状态；不会在没有成功比较时提示有更新。
+- **有可用更新**：下载并安装经过验证的最新 Release 安装包。
+- **已是最新**：已安装包版本与最新 Release 版本一致。
+- **暂无法检查更新**：Release 和源码状态都无法检查时的保守状态；不会在没有成功比较时提示有更新。
 - **删除**：先要求确认，再调用 DSH 自己的 `plugin remove` 命令，使 Profile bundle 清单与实际包状态保持一致。
 
 在当前 Web Profile 更新或删除插件后，点击 **立即重启 DSH** 即可应用新的 bundle 叠加层。

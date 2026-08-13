@@ -3,6 +3,7 @@ export interface DshBundleManifest {
   readonly version: string | null
   readonly description: string | null
   readonly patch: string
+  readonly entry: string | null
   readonly prepareScript: string | null
 }
 
@@ -27,9 +28,20 @@ export interface PluginCandidate {
   readonly version: string | null
   readonly description: string | null
   readonly installSpec: string | null
+  readonly release: GitHubReleaseArchive | null
   readonly validBundle: boolean
   readonly reason: string | null
   readonly requiresBuildApproval: boolean
+}
+
+/** A verified package archive attached to the repository's latest GitHub Release. */
+export interface GitHubReleaseArchive {
+  readonly tag: string
+  readonly version: string | null
+  readonly name: string
+  readonly downloadUrl: string
+  readonly sha256: string | null
+  readonly size: number | null
 }
 
 export type PluginUpdateStatus = 'available' | 'up-to-date' | 'unknown'
@@ -81,11 +93,13 @@ export function parseDshBundleManifest(value: unknown): DshBundleManifest | null
   const prepare = scripts !== null && typeof scripts === 'object'
     ? (scripts as Record<string, unknown>).prepare
     : undefined
+  const main = manifest.main
   return {
     name,
     version: typeof manifest.version === 'string' ? manifest.version : null,
     description: typeof manifest.description === 'string' ? manifest.description : null,
     patch,
+    entry: typeof main === 'string' && isPackageEntryPath(main) ? main : null,
     prepareScript: typeof prepare === 'string' && prepare.trim().length > 0 ? prepare : null,
   }
 }
@@ -95,6 +109,49 @@ export function githubInstallSpec(owner: string, repository: string, sha: string
     throw new UserFacingError('invalid-repository', 'GitHub 仓库或提交标识不合法。')
   }
   return `github:${owner}/${repository}#${sha}`
+}
+
+/**
+ * Select the package archive for a bundle from a GitHub Release response.
+ * The marketplace installs release archives, never an unbuilt source checkout.
+ */
+export function githubReleaseArchive(packageName: string, value: unknown): GitHubReleaseArchive | null {
+  if (!isPackageName(packageName) || value === null || typeof value !== 'object' || Array.isArray(value)) return null
+  const release = value as Record<string, unknown>
+  const tag = release.tag_name
+  const assets = release.assets
+  if (typeof tag !== 'string' || !isReleaseTag(tag) || !Array.isArray(assets)) return null
+  const version = tag.startsWith('v') ? tag.slice(1) : tag
+  const archiveStem = packageName.replace(/^@/, '').replace('/', '-')
+  const expectedName = `${archiveStem}-${version}.tgz`
+  const candidates = assets.flatMap((value): GitHubReleaseArchive[] => {
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) return []
+    const asset = value as Record<string, unknown>
+    const name = asset.name
+    const downloadUrl = asset.browser_download_url
+    if (typeof name !== 'string' || typeof downloadUrl !== 'string' || name !== expectedName || !isHttpsUrl(downloadUrl)) return []
+    const digest = typeof asset.digest === 'string' && /^sha256:[0-9a-f]{64}$/i.test(asset.digest) ? asset.digest.slice('sha256:'.length).toLowerCase() : null
+    const size = typeof asset.size === 'number' && Number.isSafeInteger(asset.size) && asset.size >= 0 ? asset.size : null
+    return [{ tag, version, name, downloadUrl, sha256: digest, size }]
+  })
+  return candidates.length === 1 ? candidates[0] ?? null : null
+}
+
+function isReleaseTag(value: string): boolean {
+  return /^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(value)
+}
+
+function isHttpsUrl(value: string): boolean {
+  try { return new URL(value).protocol === 'https:' } catch { return false }
+}
+
+function isPackageName(value: string): boolean {
+  return /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/i.test(value)
+}
+
+/** Accept only a package-relative JavaScript entry that can be checked in GitHub Contents. */
+export function isPackageEntryPath(value: string): boolean {
+  return /^(?:\.\/)?(?:[A-Za-z0-9][A-Za-z0-9._-]*\/)*[A-Za-z0-9][A-Za-z0-9._-]*\.m?js$/.test(value)
 }
 
 /** Normalize a catalog query so clients and the host share the same cache key. */
