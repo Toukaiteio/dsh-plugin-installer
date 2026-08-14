@@ -18,6 +18,11 @@ interface StateSnapshot {
   readonly profiles: readonly Profile[]
 }
 
+interface GithubConfig {
+  readonly configured: boolean
+  readonly source: 'environment' | 'saved' | 'none'
+}
+
 interface Repository {
   readonly fullName: string
   readonly owner: string
@@ -45,6 +50,12 @@ interface Candidate {
 interface ReleaseArchive {
   readonly tag: string
   readonly version: string | null
+}
+
+interface ReleaseDialogState {
+  readonly repository: Repository
+  readonly releases: readonly ReleaseArchive[]
+  readonly selectedTag: string
 }
 
 interface InstallResult {
@@ -125,12 +136,12 @@ function writeCatalogCache(query: string, plugins: Repository[]): void {
 /** Marketplace UI: direct installation from a compact repository list. */
 export function PluginMarketplaceSettingsTab({ t }: SettingsProps): ReactNode {
   const [snapshot, setSnapshot] = useState<StateSnapshot | null>(null)
+  const [githubConfig, setGithubConfig] = useState<GithubConfig | null>(null)
+  const [githubToken, setGithubToken] = useState('')
   const [plugins, setPlugins] = useState<readonly Repository[]>([])
   const [query, setQuery] = useState('')
   const [selectedProfile, setSelectedProfile] = useState('')
-  const [selectedRelease, setSelectedRelease] = useState<Record<string, string>>({})
-  const [releaseChoices, setReleaseChoices] = useState<Record<string, readonly ReleaseArchive[]>>({})
-  const [showReleaseChoices, setShowReleaseChoices] = useState<Record<string, boolean>>({})
+  const [releaseDialog, setReleaseDialog] = useState<ReleaseDialogState | null>(null)
   const [sourceConsent, setSourceConsent] = useState<Record<string, boolean>>({})
   const [sourceBuildAllowed, setSourceBuildAllowed] = useState<Record<string, boolean>>({})
   const [loading, setLoading] = useState(true)
@@ -164,7 +175,18 @@ export function PluginMarketplaceSettingsTab({ t }: SettingsProps): ReactNode {
     }
   }
 
-  useEffect(() => { void load('') }, [])
+  const loadGithubConfig = async (): Promise<void> => {
+    try {
+      setGithubConfig(await api<GithubConfig>('/config'))
+    } catch {
+      // The marketplace remains usable when an older backend does not expose this optional endpoint.
+    }
+  }
+
+  useEffect(() => {
+    void load('')
+    void loadGithubConfig()
+  }, [])
 
   const profiles = snapshot?.profiles ?? []
   const selectedSummary = profiles.find(profile => profile.name === selectedProfile)
@@ -174,14 +196,32 @@ export function PluginMarketplaceSettingsTab({ t }: SettingsProps): ReactNode {
   const actionIs = (value: string): boolean => action === value
   const isWorking = action !== null
 
-  const install = async (repository: Repository): Promise<void> => {
-    const actionKey = `install:${repository.fullName}`
+  const saveGithubToken = async (): Promise<void> => {
     if (action !== null) return
+    setAction('github-config')
+    setMessage(null)
+    setRestartAvailable(false)
+    try {
+      const result = await api<GithubConfig>('/config', {
+        method: 'POST',
+        body: JSON.stringify({ githubToken }),
+      })
+      setGithubConfig(result)
+      setGithubToken('')
+      setMessage({ kind: 'success', text: t('githubTokenSaved') })
+    } catch (error) {
+      setMessage({ kind: 'error', text: error instanceof Error ? error.message : t('githubTokenSaveFailed') })
+    } finally {
+      setAction(null)
+    }
+  }
+
+  const performInstall = async (repository: Repository, releaseTag?: string): Promise<void> => {
+    const actionKey = `install:${repository.fullName}`
     setAction(actionKey)
     setRestartAvailable(false)
     setMessage(null)
     try {
-      const releaseTag = selectedRelease[repository.fullName]
       const result = await api<InstallResult>('/install', {
         method: 'POST',
         body: JSON.stringify({
@@ -208,29 +248,38 @@ export function PluginMarketplaceSettingsTab({ t }: SettingsProps): ReactNode {
     }
   }
 
-  const loadReleaseChoices = async (repository: Repository): Promise<void> => {
-    const key = repository.fullName
+  const beginInstall = async (repository: Repository): Promise<void> => {
     if (action !== null) return
-    setShowReleaseChoices(current => ({ ...current, [key]: !current[key] }))
-    if (releaseChoices[key] !== undefined) return
-    const actionKey = `versions:${key}`
-    setAction(actionKey)
+    setAction(`inspect:${repository.fullName}`)
+    setMessage(null)
     try {
       const result = await api<{ plugin: Candidate }>(`/plugin/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.name)}`)
-      if (!result.plugin.validBundle || result.plugin.installSource !== 'release' || result.plugin.releases.length === 0) {
-        setMessage({ kind: 'error', text: result.plugin.reason ?? t('releaseChoicesUnavailable') })
-        setReleaseChoices(current => ({ ...current, [key]: [] }))
+      if (!result.plugin.validBundle) {
+        throw new MarketplaceRequestError('not-a-bundle', result.plugin.reason ?? t('releaseChoicesUnavailable'))
+      }
+      if (result.plugin.installSource === 'release' && result.plugin.releases.length > 1) {
+        const selectedTag = result.plugin.release?.tag ?? result.plugin.releases[0]?.tag
+        if (selectedTag === undefined) throw new MarketplaceRequestError('release-unavailable', t('releaseChoicesUnavailable'))
+        setReleaseDialog({ repository, releases: result.plugin.releases, selectedTag })
         return
       }
-      setReleaseChoices(current => ({ ...current, [key]: result.plugin.releases }))
-      setSelectedRelease(current => current[key] === undefined && result.plugin.release !== null
-        ? { ...current, [key]: result.plugin.release.tag }
-        : current)
+      await performInstall(repository, result.plugin.installSource === 'release' ? result.plugin.release?.tag ?? undefined : undefined)
     } catch (error) {
-      setMessage({ kind: 'error', text: error instanceof Error ? error.message : t('releaseChoicesUnavailable') })
+      if (error instanceof MarketplaceRequestError && error.code === 'build-approval-required') {
+        setSourceConsent(current => ({ ...current, [repository.fullName]: true }))
+      } else {
+        setMessage({ kind: 'error', text: error instanceof Error ? error.message : t('installFailed') })
+      }
     } finally {
       setAction(null)
     }
+  }
+
+  const confirmReleaseInstall = (): void => {
+    if (releaseDialog === null) return
+    const { repository, selectedTag } = releaseDialog
+    setReleaseDialog(null)
+    void performInstall(repository, selectedTag)
   }
 
   const openProfile = async (): Promise<void> => {
@@ -364,6 +413,38 @@ export function PluginMarketplaceSettingsTab({ t }: SettingsProps): ReactNode {
         <button type="submit" className={css.secondaryButton} disabled={loading || isWorking}>{t('refresh')}</button>
       </form>
 
+      <details className={css.githubSettings}>
+        <summary className={css.githubSettingsSummary}>
+          <span>{t('githubSettings')}</span>
+          <span className={css.githubTokenStatus}>
+            {githubConfig === null
+              ? t('loading')
+              : githubConfig.source === 'saved'
+                ? t('githubTokenStatusSaved')
+                : githubConfig.source === 'environment'
+                  ? t('githubTokenStatusEnvironment')
+                  : t('githubTokenStatusMissing')}
+          </span>
+        </summary>
+        <div className={css.githubSettingsBody}>
+          <p className={css.status}>{t('githubSettingsHint')}</p>
+          <label className={css.githubTokenField}>
+            <span>{t('githubTokenLabel')}</span>
+            <input
+              type="password"
+              value={githubToken}
+              autoComplete="off"
+              placeholder={t('githubTokenPlaceholder')}
+              disabled={isWorking}
+              onChange={event => setGithubToken(event.currentTarget.value)}
+            />
+          </label>
+          <button type="button" className={css.secondaryButton} disabled={isWorking} onClick={() => void saveGithubToken()}>
+            {actionIs('github-config') ? t('saving') : t('save')}
+          </button>
+        </div>
+      </details>
+
       {message !== null ? <p className={message.kind === 'error' ? css.error : css.success} role={message.kind === 'error' ? 'alert' : 'status'}>{message.text}</p> : null}
       {message?.kind === 'success' ? (
         restartAvailable
@@ -417,37 +498,41 @@ export function PluginMarketplaceSettingsTab({ t }: SettingsProps): ReactNode {
                   <div className={css.rowActions}>
                     {isInstalled(plugin)
                       ? <span className={css.installedTag}>{t('installedPlugin')}</span>
-                      : <button type="button" className={css.secondaryButton} disabled={isWorking || selectedProfile.length === 0} onClick={() => void install(plugin)}>{actionIs(`install:${plugin.fullName}`) ? t('installing') : t('install')}</button>}
-                    {!isInstalled(plugin) ? <button type="button" className={css.textButton} disabled={isWorking} onClick={() => void loadReleaseChoices(plugin)}>{actionIs(`versions:${plugin.fullName}`) ? t('loadingVersions') : t('chooseVersion')}</button> : null}
+                      : null}
+                    {!isInstalled(plugin) ? <button type="button" className={css.secondaryButton} disabled={isWorking || selectedProfile.length === 0} onClick={() => void beginInstall(plugin)}>{actionIs(`inspect:${plugin.fullName}`) ? t('checkingVersions') : actionIs(`install:${plugin.fullName}`) ? t('installing') : t('install')}</button> : null}
                   </div>
                 </li>
-                {showReleaseChoices[plugin.fullName] === true ? (
-                  <li className={css.versionRow}>
-                    {releaseChoices[plugin.fullName] === undefined
-                      ? <span className={css.status}>{t('loadingVersions')}</span>
-                    : (releaseChoices[plugin.fullName]?.length ?? 0) === 0
-                        ? <span className={css.status}>{t('releaseChoicesUnavailable')}</span>
-                        : <label className={css.versionPicker}>
-                            <span>{t('installVersion')}</span>
-                            <select value={selectedRelease[plugin.fullName] ?? ''} disabled={isWorking} onChange={event => setSelectedRelease(current => ({ ...current, [plugin.fullName]: event.currentTarget.value }))}>
-                              {(releaseChoices[plugin.fullName] ?? []).map(release => <option key={release.tag} value={release.tag}>{release.tag}</option>)}
-                            </select>
-                          </label>}
-                  </li>
-                ) : null}
                 {sourceConsent[plugin.fullName] === true ? (
                   <li className={css.versionRow}>
-                    <label className={css.sourceApproval}>
+                    <div className={css.sourceApproval}>
                       <input type="checkbox" checked={sourceBuildAllowed[plugin.fullName] === true} disabled={isWorking} onChange={event => setSourceBuildAllowed(current => ({ ...current, [plugin.fullName]: event.currentTarget.checked }))} />
                       <span>{t('sourceBuildApproval')}</span>
-                      <button type="button" className={css.primaryButton} disabled={isWorking || sourceBuildAllowed[plugin.fullName] !== true} onClick={() => void install(plugin)}>{actionIs(`install:${plugin.fullName}`) ? t('installing') : t('install')}</button>
-                    </label>
+                      <button type="button" className={css.primaryButton} disabled={isWorking || sourceBuildAllowed[plugin.fullName] !== true} onClick={() => void performInstall(plugin)}>{actionIs(`install:${plugin.fullName}`) ? t('installing') : t('install')}</button>
+                    </div>
                   </li>
                 ) : null}
               </Fragment>
             ))}
           </ul>
         </section>
+      ) : null}
+      {releaseDialog !== null ? (
+        <div className={css.dialogBackdrop} onMouseDown={event => { if (event.target === event.currentTarget) setReleaseDialog(null) }}>
+          <div className={css.releaseDialog} role="dialog" aria-modal="true" aria-labelledby="dsh-plugin-release-dialog-title">
+            <h2 id="dsh-plugin-release-dialog-title">{t('releaseDialogTitle')}</h2>
+            <p>{t('releaseDialogDescription')}</p>
+            <label className={css.dialogField}>
+              <span>{t('installVersion')}</span>
+              <select value={releaseDialog.selectedTag} onChange={event => setReleaseDialog(current => current === null ? current : { ...current, selectedTag: event.currentTarget.value })}>
+                {releaseDialog.releases.map(release => <option key={release.tag} value={release.tag}>{release.tag}</option>)}
+              </select>
+            </label>
+            <div className={css.dialogActions}>
+              <button type="button" className={css.secondaryButton} onClick={() => setReleaseDialog(null)}>{t('cancel')}</button>
+              <button type="button" className={css.primaryButton} onClick={confirmReleaseInstall}>{t('install')}</button>
+            </div>
+          </div>
+        </div>
       ) : null}
     </div>
   )

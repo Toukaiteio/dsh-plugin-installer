@@ -27,6 +27,7 @@ The project intentionally keeps the interface compact and newcomer-friendly. It 
 - Restart guidance and a one-click restart action after installing into the active Profile.
 - Twelve-minute plugin-list caching (server and client side) to reduce GitHub API pressure and speed up revisits.
 - Sort the marketplace list by updated time, name, or star count.
+- Configure a GitHub API token from the marketplace UI, with an environment-variable fallback.
 
 ## Requirements
 
@@ -44,6 +45,16 @@ On Windows, run the PowerShell installer directly. It downloads the latest stabl
 ```powershell
 irm https://raw.githubusercontent.com/Toukaiteio/dsh-plugin-installer/main/scripts/Install-DshPluginInstaller.ps1 | iex
 ```
+
+### GitHub API token
+
+Open **Settings → Plugins → Plugin marketplace → GitHub request settings** and paste a GitHub token when the anonymous API limit is reached. The token is never returned to the browser after saving. It is stored in:
+
+```text
+$DSH_HOME/config/dsh-plugin-installer.json
+```
+
+If `DSH_HOME` is not set, DSH's default home directory is used. Saving an empty value clears the token saved by this plugin. For unattended installation, the server-side `GITHUB_TOKEN` environment variable is also supported and is used when no plugin-saved token is present.
 
 For another Profile or to prevent DSH Web from starting, download the script first so its parameters can be passed explicitly:
 
@@ -160,7 +171,7 @@ For a native DSH Skill, create a `SKILL.md` with YAML frontmatter and place it i
 
 GitHub topics are not a security review or an endorsement. The installer validates the bundle shape and pins the selected commit, but it cannot audit third-party source code. Review a repository before installing it, especially when it requests an install or build script.
 
-The GitHub API token is read only from the server-side `GITHUB_TOKEN` environment variable when present; it is never sent to the browser.
+The GitHub API token is read on the server only. It can come from the marketplace settings or the server-side `GITHUB_TOKEN` environment variable; it is never sent back to the browser. The saved token is written under the current `DSH_HOME` and is protected with the current user's profile permissions. Use a token with the minimum permissions needed for public repository metadata.
 
 ## Automated builds and releases
 

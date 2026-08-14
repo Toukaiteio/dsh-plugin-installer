@@ -27,6 +27,7 @@ DSH Plugin Installer 会在官方 Web UI 的 **设置 → 插件** 中增加“�
 - 安装到当前 Profile 后提示重启，并提供一键重启按钮。
 - 插件列表在服务端与客户端各缓存十二分钟，降低 GitHub API 请求压力并加快再次打开的速度。
 - 支持按更新时间、按名称、按星标数排序插件列表。
+- 可以直接在插件市场配置 GitHub API Token，也支持使用环境变量作为 fallback。
 
 ## 环境要求
 
@@ -44,6 +45,16 @@ DSH Plugin Installer 会在官方 Web UI 的 **设置 → 插件** 中增加“�
 ```powershell
 irm https://raw.githubusercontent.com/Toukaiteio/dsh-plugin-installer/main/scripts/Install-DshPluginInstaller.ps1 | iex
 ```
+
+### 配置 GitHub API Token
+
+当 GitHub 匿名请求额度耗尽时，打开 **设置 → 插件 → 插件市场 → GitHub 请求设置**，粘贴 GitHub Token 并保存。保存后 Token 不会回显到页面，插件会将它写入：
+
+```text
+$DSH_HOME/config/dsh-plugin-installer.json
+```
+
+如果没有设置 `DSH_HOME`，则使用 DSH 默认目录。保存空值可以清除本插件保存的 Token。无人值守安装场景也可以使用服务端环境变量 `GITHUB_TOKEN`；当插件没有保存 Token 时，它会作为 fallback 使用。
 
 如需指定其他 Profile 或不自动启动 DSH Web，请先下载脚本后再传入参数：
 
@@ -158,7 +169,7 @@ pnpm build
 
 GitHub Topic 不代表安全审核或官方推荐。安装器会验证 bundle 结构并固定 commit，但无法审计第三方源代码。安装前应检查仓库内容，尤其要注意包含安装脚本或构建脚本的仓库。
 
-如果服务端设置了 `GITHUB_TOKEN`，安装器只在服务端读取它，不会将 Token 发送到浏览器。
+GitHub Token 只在服务端读取。它可以来自插件市场设置，也可以来自服务端环境变量 `GITHUB_TOKEN`；Token 不会返回给浏览器。保存的 Token 位于当前 `DSH_HOME` 下，并使用当前用户的 Profile 权限保护。建议只授予访问公开仓库元数据所需的最小权限。
 
 ## 自动构建与发布
 

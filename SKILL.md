@@ -12,6 +12,11 @@ another DSH Profile.
 2. Search the online GitHub list, then select **Review and install** for the
    intended repository.
 3. Install only repositories the review panel identifies as a DSH bundle.
+
+If GitHub rate limits the marketplace, expand **GitHub request settings** in the
+same tab and save a token. The token is kept server-side under the current
+`DSH_HOME`; it is not returned to the browser. The `GITHUB_TOKEN` environment
+variable remains available for unattended setups.
    The marketplace verifies a root `package.json` with `dsh.bundle.patch` and
    installs the repository at the resolved commit, rather than an unpinned
    branch.

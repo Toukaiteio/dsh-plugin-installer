@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { basename, dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -67,6 +67,17 @@ interface GitHubRepoResponse {
   language: string | null
 }
 
+interface GitHubConfigFile {
+  githubToken?: unknown
+}
+
+type GitHubTokenSource = 'environment' | 'saved' | 'none'
+
+interface GitHubConfigResponse {
+  configured: boolean
+  source: GitHubTokenSource
+}
+
 interface CommandResult { readonly output: string }
 
 /** Web host half: GitHub discovery, explicit permission gates and profile launch. */
@@ -80,14 +91,22 @@ export function apply(ctx: Context): void {
 }
 
 class MarketplaceRuntime {
+  private readonly dshHome: string
   private readonly profilesRoot: string
   private readonly currentProfile: string
+  private githubToken: string | null
+  private githubTokenSource: GitHubTokenSource
   private readonly searchCache = new Map<string, { expiresAt: number; value: GitHubRepository[] }>()
   private readonly releaseCache = new Map<string, { expiresAt: number; value: Promise<readonly GitHubReleaseArchive[]> }>()
   private readonly commitCache = new Map<string, { expiresAt: number; value: Promise<string | null> }>()
 
   constructor(private readonly ctx: Context) {
-    this.profilesRoot = join(this.resolveDshHome(), 'profiles')
+    this.dshHome = this.resolveDshHome()
+    this.profilesRoot = join(this.dshHome, 'profiles')
+    const savedToken = this.readSavedGithubToken()
+    const environmentToken = this.readEnvironmentGithubToken()
+    this.githubToken = savedToken ?? environmentToken
+    this.githubTokenSource = savedToken !== null ? 'saved' : environmentToken !== null ? 'environment' : 'none'
     this.currentProfile = this.resolveCurrentProfile()
   }
 
@@ -97,6 +116,7 @@ class MarketplaceRuntime {
       if (!url.pathname.startsWith(API_PREFIX)) throw new UserFacingError('not-found', '未找到请求的接口。', 404)
       const tail = url.pathname.slice(API_PREFIX.length) || '/'
       if (request.method === 'GET' && tail === '/state') return this.json(response, 200, await this.state())
+      if (request.method === 'GET' && tail === '/config') return this.json(response, 200, this.githubConfig())
       if (request.method === 'GET' && tail === '/plugins') {
         return this.json(response, 200, {
           plugins: await this.search(url.searchParams.get('query') ?? '', url.searchParams.get('refresh') === '1'),
@@ -109,6 +129,7 @@ class MarketplaceRuntime {
         return this.json(response, 200, { plugin: await this.inspect(owner, repository) })
       }
       const body = request.method === 'POST' ? await readJson(request) : undefined
+      if (request.method === 'POST' && tail === '/config') return this.json(response, 200, this.configureGithubToken(body))
       if (request.method === 'POST' && tail === '/install') return this.json(response, 200, await this.install(body))
       if (request.method === 'POST' && tail === '/update') return this.json(response, 200, await this.update(body))
       if (request.method === 'POST' && tail === '/remove') return this.json(response, 200, await this.remove(body))
@@ -172,6 +193,59 @@ class MarketplaceRuntime {
     const value = [...combined.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 40)
     this.cacheSearch(normalized, value)
     return value
+  }
+
+  private githubConfig(): GitHubConfigResponse {
+    return {
+      configured: this.githubToken !== null,
+      source: this.githubTokenSource,
+    }
+  }
+
+  private configureGithubToken(body: unknown): GitHubConfigResponse {
+    const value = object(body).githubToken
+    if (typeof value !== 'string') {
+      throw new UserFacingError('invalid-github-token', 'GitHub Token 必须是文本。', 400)
+    }
+    const token = value.trim()
+    const configPath = join(this.dshHome, 'config', 'dsh-plugin-installer.json')
+    mkdirSync(dirname(configPath), { recursive: true })
+    writeFileSync(configPath, `${JSON.stringify(token.length === 0 ? {} : { githubToken: token }, null, 2)}\n`, {
+      encoding: 'utf8',
+      mode: 0o600,
+    })
+    try {
+      chmodSync(configPath, 0o600)
+    } catch {
+      // Windows does not expose POSIX file modes; the user profile ACL still applies.
+    }
+    const environmentToken = this.readEnvironmentGithubToken()
+    this.githubToken = token.length === 0 ? environmentToken : token
+    this.githubTokenSource = token.length === 0
+      ? environmentToken === null ? 'none' : 'environment'
+      : 'saved'
+    this.searchCache.clear()
+    this.releaseCache.clear()
+    this.commitCache.clear()
+    return this.githubConfig()
+  }
+
+  private readSavedGithubToken(): string | null {
+    const configPath = join(this.dshHome, 'config', 'dsh-plugin-installer.json')
+    if (!existsSync(configPath)) return null
+    try {
+      const config = JSON.parse(readFileSync(configPath, 'utf8')) as GitHubConfigFile
+      return typeof config.githubToken === 'string' && config.githubToken.trim().length > 0
+        ? config.githubToken.trim()
+        : null
+    } catch {
+      return null
+    }
+  }
+
+  private readEnvironmentGithubToken(): string | null {
+    const token = process.env.GITHUB_TOKEN?.trim()
+    return token === undefined || token.length === 0 ? null : token
   }
 
   private cacheSearch(query: string, value: GitHubRepository[]): void {
@@ -397,7 +471,7 @@ class MarketplaceRuntime {
 
   private async githubJson<T>(path: string): Promise<T> {
     const headers: Record<string, string> = { Accept: 'application/vnd.github+json', 'User-Agent': 'dsh-plugin-installer' }
-    if (process.env.GITHUB_TOKEN?.trim()) headers.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`
+    if (this.githubToken !== null) headers.Authorization = `Bearer ${this.githubToken}`
     let response: Response
     try {
       response = await fetch(`https://api.github.com${path}`, { headers, signal: AbortSignal.timeout(15_000) })
@@ -408,7 +482,10 @@ class MarketplaceRuntime {
       if (response.status === 404) {
         throw new UserFacingError('github-not-found', 'GitHub 未找到该仓库或文件。', 404)
       }
-      const message = response.status === 403 || response.status === 429 ? 'GitHub 请求频率受限，请稍后重试或配置 GITHUB_TOKEN。' : `GitHub 返回了 ${response.status}。`
+      if (response.status === 401) {
+        throw new UserFacingError('github-auth-failed', 'GitHub Token 无效或已过期，请更新插件设置。', 502)
+      }
+      const message = response.status === 403 || response.status === 429 ? 'GitHub 请求频率受限，请稍后重试，或在插件市场的 GitHub 请求设置中配置 Token。' : `GitHub 返回了 ${response.status}。`
       throw new UserFacingError('github-error', message, 502)
     }
     return await response.json() as T
