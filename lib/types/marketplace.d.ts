@@ -67,6 +67,7 @@ export declare class UserFacingError extends Error {
     readonly status: number;
     constructor(code: string, message: string, status?: number);
 }
+export declare function isMarketplacePluginRepository(owner: string, repository: string): boolean;
 export declare function isProfileName(value: unknown): value is string;
 export declare function isRepositorySegment(value: unknown): value is string;
 /** Extract only the fields that make a root package a DSH bundle. */
@@ -84,8 +85,8 @@ export declare function isReleaseTag(value: string): boolean;
 export declare function isPackageEntryPath(value: string): boolean;
 /** Normalize a catalog query so clients and the host share the same cache key. */
 export declare function normalizeCatalogQuery(query: string): string;
-/** Catalog sort keys offered by the marketplace UI. */
-export type CatalogSortKey = 'updated' | 'name' | 'stars';
+/** Catalog sort keys exposed by the marketplace, both supported by GitHub search. */
+export type CatalogSortKey = 'updated' | 'stars';
 /** Catalog sort direction offered by the marketplace UI. */
 export type CatalogSortDirection = 'asc' | 'desc';
 /** Structural shape required to sort a marketplace catalog entry. */
@@ -96,8 +97,9 @@ export interface CatalogSortEntry {
 }
 /**
  * Return a new catalog sorted by the chosen key without mutating the source.
- * `updated` orders by the repository update timestamp, `name` by the full
- * repository name, and `stars` by the star count.
+ * `updated` orders by the repository update timestamp and `stars` by the star
+ * count. Both keys map directly to GitHub's supported repository search sort
+ * options.
  */
 export declare function sortCatalog<T extends CatalogSortEntry>(entries: readonly T[], key: CatalogSortKey, direction: CatalogSortDirection): T[];
 //# sourceMappingURL=marketplace.d.ts.map

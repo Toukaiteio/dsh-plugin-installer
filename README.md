@@ -15,6 +15,7 @@ The project intentionally keeps the interface compact and newcomer-friendly. It 
 ## Features
 
 - Online discovery from GitHub `dsh-plugin` and `dsh` topics.
+- Excludes the DeepSeek Harness host repository from plugin-marketplace results.
 - Root `package.json` validation for `dsh.bundle.patch` before installation.
 - Verified GitHub Release installs using the published `.tgz` build artifact whenever available; source installs are allowed only when the checked-in JavaScript entry exists.
 - Optional Release version selection from the marketplace list; stable releases are preferred by default.
@@ -25,8 +26,9 @@ The project intentionally keeps the interface compact and newcomer-friendly. It 
 - Interface copy and date formatting that follow the official DSH language preference.
 - Web Profile list, fast Profile opening, and Web Profile creation.
 - Restart guidance and a one-click restart action after installing into the active Profile.
-- Twelve-minute plugin-list caching (server and client side) to reduce GitHub API pressure and speed up revisits.
-- Sort the marketplace list by updated time, name, or star count.
+- Twelve-minute per-query, per-sort, and per-page caching on both the server and client to reduce GitHub API pressure and speed up revisits.
+- Infinite scrolling that fetches the next GitHub search page before reaching the end of the current list.
+- The marketplace keeps two GitHub-supported repository search orders: updated time and star count.
 - Configure a GitHub API token from the marketplace UI, with an environment-variable fallback.
 
 ## Requirements
@@ -185,6 +187,19 @@ git push origin v0.1.6
 ```
 
 The release workflow rejects a tag when its version does not match `package.json`.
+
+### Version policy
+
+Stable releases use `MAJOR.MINOR.PATCH` and are tagged and published, for
+example `0.1.13` / `v0.1.13`. Iterative local test packages use the next patch
+version with a development suffix, such as `0.1.13-dev.1`, then
+`0.1.13-dev.2`. This keeps every locally installable package distinct without
+creating an unnecessary stable Release for each small change.
+
+Development packages should normally remain local and untagged. If a
+pre-release tag is intentionally pushed, the release workflow publishes it as
+a GitHub pre-release; the one-click installers still select the latest stable
+Release.
 
 ## License
 

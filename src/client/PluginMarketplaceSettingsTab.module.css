@@ -232,6 +232,13 @@
 .repository { color: var(--dsw-alias-label-primary); font-size: 14px; line-height: 20px; font-weight: 600; }
 
 .catalog { display: flex; flex-direction: column; gap: 10px; }
+.loadMore {
+  display: flex;
+  min-height: 20px;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 0;
+}
 .rows { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--dsw-alias-border-l2); }
 .row { justify-content: space-between; align-items: flex-start; border-bottom: 1px solid var(--dsw-alias-border-l2); padding: 13px 2px; }
 .rowMain { min-width: 0; padding-right: 12px; }

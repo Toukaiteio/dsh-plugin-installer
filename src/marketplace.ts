@@ -76,6 +76,13 @@ export class UserFacingError extends Error {
   }
 }
 
+/** DeepSeek Harness itself is a host application, not a marketplace plugin. */
+const EXCLUDED_MARKETPLACE_REPOSITORIES = new Set(['deepseek-ai/deepseek-harness'])
+
+export function isMarketplacePluginRepository(owner: string, repository: string): boolean {
+  return !EXCLUDED_MARKETPLACE_REPOSITORIES.has(`${owner}/${repository}`.toLocaleLowerCase())
+}
+
 export function isProfileName(value: unknown): value is string {
   return typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(value)
 }
@@ -179,8 +186,8 @@ export function normalizeCatalogQuery(query: string): string {
   return query.trim().replace(/\s+/g, ' ').slice(0, 120)
 }
 
-/** Catalog sort keys offered by the marketplace UI. */
-export type CatalogSortKey = 'updated' | 'name' | 'stars'
+/** Catalog sort keys exposed by the marketplace, both supported by GitHub search. */
+export type CatalogSortKey = 'updated' | 'stars'
 
 /** Catalog sort direction offered by the marketplace UI. */
 export type CatalogSortDirection = 'asc' | 'desc'
@@ -194,17 +201,14 @@ export interface CatalogSortEntry {
 
 /**
  * Return a new catalog sorted by the chosen key without mutating the source.
- * `updated` orders by the repository update timestamp, `name` by the full
- * repository name, and `stars` by the star count.
+ * `updated` orders by the repository update timestamp and `stars` by the star
+ * count. Both keys map directly to GitHub's supported repository search sort
+ * options.
  */
 export function sortCatalog<T extends CatalogSortEntry>(entries: readonly T[], key: CatalogSortKey, direction: CatalogSortDirection): T[] {
   const factor = direction === 'asc' ? 1 : -1
   return [...entries].sort((a, b) => {
-    const compared = key === 'name'
-      ? a.fullName.localeCompare(b.fullName, undefined, { numeric: true, sensitivity: 'base' })
-      : key === 'stars'
-        ? a.stars - b.stars
-        : a.updatedAt.localeCompare(b.updatedAt)
+    const compared = key === 'stars' ? a.stars - b.stars : a.updatedAt.localeCompare(b.updatedAt)
     if (compared !== 0) return factor * compared
     return a.fullName.localeCompare(b.fullName, undefined, { numeric: true, sensitivity: 'variant' })
   })

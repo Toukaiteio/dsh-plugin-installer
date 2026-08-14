@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { MarketplaceLocaleKey } from './locales.js'
 import { normalizeCatalogQuery, sortCatalog, type CatalogSortDirection, type CatalogSortKey } from '../marketplace.js'
@@ -100,37 +100,63 @@ function updated(value: string, locale: string): string {
 
 /** Client-side catalog cache lifetime, kept in sync with the server cache. */
 const CATALOG_CACHE_TTL_MS = 12 * 60_000
-const CATALOG_CACHE_MAX_ENTRIES = 24
+const CATALOG_CACHE_MAX_ENTRIES = 48
+
+interface CatalogPage {
+  readonly plugins: Repository[]
+  readonly hasMore: boolean
+}
 
 interface CatalogCacheEntry {
   readonly fetchedAt: number
-  readonly plugins: Repository[]
+  readonly page: CatalogPage
 }
 
 const catalogCache = new Map<string, CatalogCacheEntry>()
 
-function readCatalogCache(query: string): Repository[] | null {
-  const normalized = normalizeCatalogQuery(query)
-  const entry = catalogCache.get(normalized)
-  if (entry === undefined) return null
-  if (Date.now() - entry.fetchedAt > CATALOG_CACHE_TTL_MS) {
-    catalogCache.delete(normalized)
-    return null
-  }
-  return entry.plugins
+function catalogCacheKey(query: string, sort: CatalogSortKey, direction: CatalogSortDirection, page: number): string {
+  return `${sort}:${direction}:${page}:${encodeURIComponent(normalizeCatalogQuery(query))}`
 }
 
-function writeCatalogCache(query: string, plugins: Repository[]): void {
+function readCatalogCache(query: string, sort: CatalogSortKey, direction: CatalogSortDirection, page: number): CatalogPage | null {
+  const entry = catalogCache.get(catalogCacheKey(query, sort, direction, page))
+  if (entry === undefined) return null
+  if (Date.now() - entry.fetchedAt > CATALOG_CACHE_TTL_MS) {
+    catalogCache.delete(catalogCacheKey(query, sort, direction, page))
+    return null
+  }
+  return entry.page
+}
+
+function writeCatalogCache(query: string, sort: CatalogSortKey, direction: CatalogSortDirection, page: number, value: CatalogPage): void {
   const now = Date.now()
-  const normalized = normalizeCatalogQuery(query)
+  const key = catalogCacheKey(query, sort, direction, page)
   for (const [key, entry] of catalogCache) {
     if (now - entry.fetchedAt > CATALOG_CACHE_TTL_MS) catalogCache.delete(key)
   }
-  if (!catalogCache.has(normalized) && catalogCache.size >= CATALOG_CACHE_MAX_ENTRIES) {
+  if (!catalogCache.has(key) && catalogCache.size >= CATALOG_CACHE_MAX_ENTRIES) {
     const oldest = catalogCache.keys().next().value
     if (oldest !== undefined) catalogCache.delete(oldest)
   }
-  catalogCache.set(normalized, { fetchedAt: now, plugins })
+  catalogCache.set(key, { fetchedAt: now, page: value })
+}
+
+function clearCatalogCache(query: string, sort: CatalogSortKey, direction: CatalogSortDirection): void {
+  const suffix = `:${encodeURIComponent(normalizeCatalogQuery(query))}`
+  const prefix = `${sort}:${direction}:`
+  for (const key of catalogCache.keys()) {
+    if (key.startsWith(prefix) && key.endsWith(suffix)) catalogCache.delete(key)
+  }
+}
+
+function mergeCatalog(current: readonly Repository[], next: readonly Repository[]): Repository[] {
+  const seen = new Set(current.map(plugin => plugin.fullName.toLocaleLowerCase()))
+  return [...current, ...next.filter(plugin => {
+    const key = plugin.fullName.toLocaleLowerCase()
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })]
 }
 
 /** Marketplace UI: direct installation from a compact repository list. */
@@ -145,33 +171,63 @@ export function PluginMarketplaceSettingsTab({ t }: SettingsProps): ReactNode {
   const [sourceConsent, setSourceConsent] = useState<Record<string, boolean>>({})
   const [sourceBuildAllowed, setSourceBuildAllowed] = useState<Record<string, boolean>>({})
   const [loading, setLoading] = useState(true)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [catalogPage, setCatalogPage] = useState(0)
+  const [hasMore, setHasMore] = useState(false)
+  const [loadMoreFailed, setLoadMoreFailed] = useState(false)
   const [action, setAction] = useState<string | null>(null)
   const [message, setMessage] = useState<{ kind: 'error' | 'success'; text: string } | null>(null)
   const [restartAvailable, setRestartAvailable] = useState(false)
   const [newProfile, setNewProfile] = useState('')
   const [sortBy, setSortBy] = useState<CatalogSortKey>('updated')
   const [sortDirection, setSortDirection] = useState<CatalogSortDirection>('desc')
+  const loadMoreRef = useRef<HTMLDivElement | null>(null)
 
-  const load = async (search = query, preserveMessage = false, bypassCache = false): Promise<void> => {
-    setLoading(true)
+  const load = async (
+    search = query,
+    preserveMessage = false,
+    bypassCache = false,
+    page = 1,
+    requestedSort = sortBy,
+    requestedDirection = sortDirection,
+  ): Promise<void> => {
+    if (page === 1) {
+      setLoading(true)
+      setCatalogPage(0)
+      setHasMore(false)
+      setLoadMoreFailed(false)
+    } else {
+      setLoadingMore(true)
+      setLoadMoreFailed(false)
+    }
     if (!preserveMessage) setMessage(null)
     try {
       const normalizedSearch = normalizeCatalogQuery(search)
-      const cached = bypassCache ? null : readCatalogCache(normalizedSearch)
+      if (bypassCache && page === 1) clearCatalogCache(normalizedSearch, requestedSort, requestedDirection)
+      const cached = bypassCache ? null : readCatalogCache(normalizedSearch, requestedSort, requestedDirection, page)
       const catalogPromise = cached === null
-        ? api<{ plugins: Repository[] }>(`/plugins?query=${encodeURIComponent(normalizedSearch)}${bypassCache ? '&refresh=1' : ''}`).then(result => {
-            writeCatalogCache(normalizedSearch, result.plugins)
-            return result.plugins
+        ? api<CatalogPage>(`/plugins?query=${encodeURIComponent(normalizedSearch)}&sort=${requestedSort}&order=${requestedDirection}&page=${page}${bypassCache ? '&refresh=1' : ''}`).then(result => {
+            writeCatalogCache(normalizedSearch, requestedSort, requestedDirection, page, result)
+            return result
           })
         : Promise.resolve(cached)
-      const [state, catalog] = await Promise.all([api<StateSnapshot>('/state'), catalogPromise])
-      setSnapshot(state)
-      setSelectedProfile(current => current || state.currentProfile)
-      setPlugins(catalog)
+      const [state, catalog] = await Promise.all([page === 1 ? api<StateSnapshot>('/state') : Promise.resolve(null), catalogPromise])
+      if (state !== null) {
+        setSnapshot(state)
+        setSelectedProfile(current => current || state.currentProfile)
+      }
+      setPlugins(current => page === 1 ? catalog.plugins : mergeCatalog(current, catalog.plugins))
+      setCatalogPage(page)
+      setHasMore(catalog.hasMore)
     } catch (error) {
       setMessage({ kind: 'error', text: error instanceof Error ? error.message : t('loadFailed') })
+      if (page > 1) {
+        setHasMore(false)
+        setLoadMoreFailed(true)
+      }
     } finally {
-      setLoading(false)
+      if (page === 1) setLoading(false)
+      else setLoadingMore(false)
     }
   }
 
@@ -192,6 +248,21 @@ export function PluginMarketplaceSettingsTab({ t }: SettingsProps): ReactNode {
   const selectedSummary = profiles.find(profile => profile.name === selectedProfile)
   const visiblePlugins = useMemo(() => sortCatalog(plugins, sortBy, sortDirection), [plugins, sortBy, sortDirection])
   const updatableCount = selectedSummary?.installedPlugins.filter(plugin => plugin.updateStatus === 'available').length ?? 0
+
+  const loadNextPage = (): void => {
+    if (loading || loadingMore || !hasMore) return
+    void load(query, true, false, catalogPage + 1)
+  }
+
+  useEffect(() => {
+    const target = loadMoreRef.current
+    if (target === null || !hasMore) return
+    const observer = new IntersectionObserver(entries => {
+      if (entries.some(entry => entry.isIntersecting)) loadNextPage()
+    }, { rootMargin: '480px 0px' })
+    observer.observe(target)
+    return () => observer.disconnect()
+  }, [catalogPage, hasMore, loading, loadingMore, query, sortBy, sortDirection])
 
   const actionIs = (value: string): boolean => action === value
   const isWorking = action !== null
@@ -370,7 +441,7 @@ export function PluginMarketplaceSettingsTab({ t }: SettingsProps): ReactNode {
   }
 
   return (
-    <div className={css.root} aria-busy={loading || isWorking}>
+    <div className={css.root} aria-busy={loading || loadingMore || isWorking}>
       <section className={css.profileBar} aria-label={t('currentProfile')}>
         <label>
           <span className={css.visuallyHidden}>{t('currentProfile')}</span>
@@ -393,24 +464,36 @@ export function PluginMarketplaceSettingsTab({ t }: SettingsProps): ReactNode {
           value={sortBy}
           aria-label={t('sort')}
           title={t('sort')}
-          disabled={isWorking || plugins.length === 0}
-          onChange={event => setSortBy(event.currentTarget.value as CatalogSortKey)}
+          disabled={isWorking || loading || loadingMore}
+          onChange={event => {
+            const nextSort = event.currentTarget.value as CatalogSortKey
+            if (nextSort === sortBy) return
+            setSortBy(nextSort)
+            setCatalogPage(0)
+            setHasMore(false)
+            void load(query, false, false, 1, nextSort, sortDirection)
+          }}
         >
           <option value="updated">{t('sortUpdated')}</option>
-          <option value="name">{t('sortName')}</option>
           <option value="stars">{t('sortStars')}</option>
         </select>
         <button
           type="button"
           className={css.sortDirection}
-          disabled={isWorking || plugins.length === 0}
-          onClick={() => setSortDirection(direction => direction === 'asc' ? 'desc' : 'asc')}
+          disabled={isWorking || loading || loadingMore}
+          onClick={() => {
+            const nextDirection = sortDirection === 'asc' ? 'desc' : 'asc'
+            setSortDirection(nextDirection)
+            setCatalogPage(0)
+            setHasMore(false)
+            void load(query, false, false, 1, sortBy, nextDirection)
+          }}
           aria-label={sortDirection === 'asc' ? t('sortToggleToDesc') : t('sortToggleToAsc')}
           title={sortDirection === 'asc' ? t('sortAsc') : t('sortDesc')}
         >
           <span aria-hidden="true">{sortDirection === 'asc' ? '↑' : '↓'}</span>
         </button>
-        <button type="submit" className={css.secondaryButton} disabled={loading || isWorking}>{t('refresh')}</button>
+        <button type="submit" className={css.secondaryButton} disabled={loading || loadingMore || isWorking}>{t('refresh')}</button>
       </form>
 
       <details className={css.githubSettings}>
@@ -514,6 +597,15 @@ export function PluginMarketplaceSettingsTab({ t }: SettingsProps): ReactNode {
               </Fragment>
             ))}
           </ul>
+          <div ref={loadMoreRef} className={css.loadMore} aria-live="polite">
+            {loadingMore
+              ? <span className={css.status}>{t('loadingMore')}</span>
+              : loadMoreFailed
+                ? <span className={css.status}>{t('loadMoreFailed')}</span>
+                : !hasMore
+                  ? <span className={css.status}>{t('catalogComplete')}</span>
+                  : null}
+          </div>
         </section>
       ) : null}
       {releaseDialog !== null ? (

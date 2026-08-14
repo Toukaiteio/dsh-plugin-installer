@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { githubInstallSpec, githubReleaseArchive, githubReleaseArchives, isPackageEntryPath, isProfileName, isReleaseTag, normalizeCatalogQuery, parseDshBundleManifest, sortCatalog } from '../src/marketplace.js'
+import { githubInstallSpec, githubReleaseArchive, githubReleaseArchives, isMarketplacePluginRepository, isPackageEntryPath, isProfileName, isReleaseTag, normalizeCatalogQuery, parseDshBundleManifest, sortCatalog } from '../src/marketplace.js'
 
 describe('DSH bundle manifest validation', () => {
   it('accepts a distributable DSH bundle and reports its install script', () => {
@@ -41,6 +41,12 @@ describe('input constraints', () => {
 
   it('pins GitHub installs to a commit', () => {
     expect(githubInstallSpec('deepseek-ai', 'deepseek-harness', '47f9438')).toBe('github:deepseek-ai/deepseek-harness#47f9438')
+  })
+
+  it('excludes the DeepSeek Harness host repository from the marketplace', () => {
+    expect(isMarketplacePluginRepository('deepseek-ai', 'deepseek-harness')).toBe(false)
+    expect(isMarketplacePluginRepository('DeepSeek-AI', 'DeepSeek-Harness')).toBe(false)
+    expect(isMarketplacePluginRepository('Toukaiteio', 'dsh-plugin-installer')).toBe(true)
   })
 
   it('selects only the matching HTTPS release archive', () => {
@@ -88,8 +94,8 @@ describe('catalog sorting', () => {
     { fullName: 'gamma/plugin', stars: 20, updatedAt: '2024-02-01T00:00:00Z' },
   ]
 
-  it('sorts by name without mutating the source array', () => {
-    expect(sortCatalog(entries, 'name', 'asc').map(entry => entry.fullName)).toEqual(['alpha/plugin', 'beta/plugin', 'gamma/plugin'])
+  it('sorts by a supported key without mutating the source array', () => {
+    expect(sortCatalog(entries, 'updated', 'asc').map(entry => entry.fullName)).toEqual(['beta/plugin', 'gamma/plugin', 'alpha/plugin'])
     expect(entries.map(entry => entry.fullName)).toEqual(['beta/plugin', 'alpha/plugin', 'gamma/plugin'])
   })
 

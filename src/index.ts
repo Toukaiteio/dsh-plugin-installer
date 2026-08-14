@@ -17,11 +17,15 @@ import {
   UserFacingError,
   githubInstallSpec,
   githubReleaseArchives,
+  isMarketplacePluginRepository,
   isProfileName,
   isReleaseTag,
   isRepositorySegment,
   normalizeCatalogQuery,
   parseDshBundleManifest,
+  sortCatalog,
+  type CatalogSortDirection,
+  type CatalogSortKey,
 } from './marketplace.js'
 
 export const name = 'dsh-plugin-installer'
@@ -31,8 +35,12 @@ const ROUTE_PREFIX = '/dsh-plugin-installer'
 const API_PREFIX = `${ROUTE_PREFIX}/api`
 /** How long the marketplace catalog stays cached before re-querying GitHub. */
 const CATALOG_CACHE_TTL_MS = 12 * 60_000
-/** Bound the number of distinct searches retained by one Web Profile process. */
-const CATALOG_CACHE_MAX_ENTRIES = 24
+/** Number of repositories requested from each GitHub topic query per page. */
+const CATALOG_PAGE_SIZE = 30
+/** GitHub Search API exposes at most 1,000 results for one query. */
+const CATALOG_MAX_PAGE = Math.ceil(1_000 / CATALOG_PAGE_SIZE)
+/** Bound the number of sort/filter/page combinations retained by one process. */
+const CATALOG_CACHE_MAX_ENTRIES = 48
 /** Refuse unexpectedly large release packages before writing them to DSH_HOME. */
 const MAX_RELEASE_ARCHIVE_BYTES = 32 * 1024 * 1024
 const SELF_MANIFEST = JSON.parse(readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8')) as {
@@ -78,6 +86,11 @@ interface GitHubConfigResponse {
   source: GitHubTokenSource
 }
 
+interface CatalogSearchResult {
+  plugins: GitHubRepository[]
+  hasMore: boolean
+}
+
 interface CommandResult { readonly output: string }
 
 /** Web host half: GitHub discovery, explicit permission gates and profile launch. */
@@ -96,7 +109,7 @@ class MarketplaceRuntime {
   private readonly currentProfile: string
   private githubToken: string | null
   private githubTokenSource: GitHubTokenSource
-  private readonly searchCache = new Map<string, { expiresAt: number; value: GitHubRepository[] }>()
+  private readonly searchCache = new Map<string, { expiresAt: number; value: CatalogSearchResult }>()
   private readonly releaseCache = new Map<string, { expiresAt: number; value: Promise<readonly GitHubReleaseArchive[]> }>()
   private readonly commitCache = new Map<string, { expiresAt: number; value: Promise<string | null> }>()
 
@@ -118,9 +131,11 @@ class MarketplaceRuntime {
       if (request.method === 'GET' && tail === '/state') return this.json(response, 200, await this.state())
       if (request.method === 'GET' && tail === '/config') return this.json(response, 200, this.githubConfig())
       if (request.method === 'GET' && tail === '/plugins') {
-        return this.json(response, 200, {
-          plugins: await this.search(url.searchParams.get('query') ?? '', url.searchParams.get('refresh') === '1'),
-        })
+        const sort = parseCatalogSort(url.searchParams.get('sort'))
+        const direction = parseCatalogDirection(url.searchParams.get('order'))
+        const page = parseCatalogPage(url.searchParams.get('page'))
+        const result = await this.search(url.searchParams.get('query') ?? '', sort, direction, page, url.searchParams.get('refresh') === '1')
+        return this.json(response, 200, { ...result, page, sort, direction })
       }
       const match = /^\/plugin\/([^/]+)\/([^/]+)$/.exec(tail)
       if (request.method === 'GET' && match !== null) {
@@ -179,20 +194,30 @@ class MarketplaceRuntime {
     }))).then(value => value.sort((a, b) => a.name.localeCompare(b.name)))
   }
 
-  private async search(query: string, bypassCache = false): Promise<GitHubRepository[]> {
+  private async search(query: string, sort: CatalogSortKey, direction: CatalogSortDirection, page: number, bypassCache = false): Promise<CatalogSearchResult> {
     const normalized = normalizeCatalogQuery(query)
-    const cached = this.searchCache.get(normalized)
+    if (bypassCache && page === 1) this.clearSearchCache(normalized, sort, direction)
+    const cacheKey = JSON.stringify([normalized, sort, direction, page])
+    const cached = this.searchCache.get(cacheKey)
     if (!bypassCache && cached !== undefined && cached.expiresAt > Date.now()) return cached.value
     const words = normalized.length === 0 ? '' : ` ${normalized.replace(/\s+/g, ' ')}`
+    const queryOptions = `sort=${sort}&order=${direction}&page=${page}&per_page=${CATALOG_PAGE_SIZE}`
     const responses = await Promise.all([
-      this.githubJson<{ items: GitHubRepoResponse[] }>(`/search/repositories?q=${encodeURIComponent(`topic:dsh-plugin archived:false${words}`)}&sort=updated&order=desc&per_page=30`),
-      this.githubJson<{ items: GitHubRepoResponse[] }>(`/search/repositories?q=${encodeURIComponent(`topic:dsh archived:false${words}`)}&sort=updated&order=desc&per_page=30`),
+      this.githubJson<{ items: GitHubRepoResponse[] }>(`/search/repositories?q=${encodeURIComponent(`topic:dsh-plugin archived:false${words}`)}&${queryOptions}`),
+      this.githubJson<{ items: GitHubRepoResponse[] }>(`/search/repositories?q=${encodeURIComponent(`topic:dsh archived:false${words}`)}&${queryOptions}`),
     ])
     const combined = new Map<number, GitHubRepository>()
-    for (const item of responses.flatMap(response => response.items)) combined.set(item.id, toRepository(item))
-    const value = [...combined.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 40)
-    this.cacheSearch(normalized, value)
-    return value
+    for (const item of responses.flatMap(response => response.items)) {
+      const repository = toRepository(item)
+      if (isMarketplacePluginRepository(repository.owner, repository.name)) combined.set(repository.id, repository)
+    }
+    const value = sortCatalog([...combined.values()], sort, direction).slice(0, CATALOG_PAGE_SIZE * 2)
+    const result = {
+      plugins: value,
+      hasMore: page < CATALOG_MAX_PAGE && responses.some(response => response.items.length === CATALOG_PAGE_SIZE),
+    }
+    this.cacheSearch(cacheKey, result)
+    return result
   }
 
   private githubConfig(): GitHubConfigResponse {
@@ -248,21 +273,31 @@ class MarketplaceRuntime {
     return token === undefined || token.length === 0 ? null : token
   }
 
-  private cacheSearch(query: string, value: GitHubRepository[]): void {
+  private cacheSearch(key: string, value: CatalogSearchResult): void {
     const now = Date.now()
     for (const [key, entry] of this.searchCache) {
       if (entry.expiresAt <= now) this.searchCache.delete(key)
     }
-    if (!this.searchCache.has(query) && this.searchCache.size >= CATALOG_CACHE_MAX_ENTRIES) {
+    if (!this.searchCache.has(key) && this.searchCache.size >= CATALOG_CACHE_MAX_ENTRIES) {
       const oldest = this.searchCache.keys().next().value
       if (oldest !== undefined) this.searchCache.delete(oldest)
     }
-    this.searchCache.set(query, { value, expiresAt: now + CATALOG_CACHE_TTL_MS })
+    this.searchCache.set(key, { value, expiresAt: now + CATALOG_CACHE_TTL_MS })
+  }
+
+  private clearSearchCache(query: string, sort: CatalogSortKey, direction: CatalogSortDirection): void {
+    const prefix = `${JSON.stringify([query, sort, direction]).slice(0, -1)},`
+    for (const key of this.searchCache.keys()) {
+      if (key.startsWith(prefix)) this.searchCache.delete(key)
+    }
   }
 
   private async inspect(owner: string, repository: string, releaseTag?: string): Promise<PluginCandidate> {
     if (!isRepositorySegment(owner) || !isRepositorySegment(repository)) {
       throw new UserFacingError('invalid-repository', 'GitHub 仓库地址不合法。')
+    }
+    if (!isMarketplacePluginRepository(owner, repository)) {
+      throw new UserFacingError('not-a-plugin', 'DeepSeek Harness 本体不是可安装的市场插件。', 400)
     }
     const repo = toRepository(await this.githubJson<GitHubRepoResponse>(`/repos/${owner}/${repository}`))
     let parsed: ReturnType<typeof parseDshBundleManifest> = null
@@ -659,6 +694,20 @@ class MarketplaceRuntime {
     response.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
     response.end(JSON.stringify(body))
   }
+}
+
+function parseCatalogSort(value: string | null): CatalogSortKey {
+  return value === 'stars' ? 'stars' : 'updated'
+}
+
+function parseCatalogDirection(value: string | null): CatalogSortDirection {
+  return value === 'asc' ? 'asc' : 'desc'
+}
+
+function parseCatalogPage(value: string | null): number {
+  if (value === null || !/^\d+$/.test(value)) return 1
+  const page = Number(value)
+  return Number.isSafeInteger(page) && page >= 1 && page <= CATALOG_MAX_PAGE ? page : 1
 }
 
 function toRepository(value: GitHubRepoResponse): GitHubRepository {

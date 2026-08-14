@@ -53,12 +53,14 @@ export declare const zh: {
     readonly updated: "更新于";
     readonly sort: "排序";
     readonly sortUpdated: "更新时间";
-    readonly sortName: "名称";
     readonly sortStars: "星标数";
     readonly sortAsc: "升序";
     readonly sortDesc: "降序";
     readonly sortToggleToAsc: "改为升序";
     readonly sortToggleToDesc: "改为降序";
+    readonly loadingMore: "正在加载更多插件…";
+    readonly loadMoreFailed: "无法继续加载更多插件，请刷新列表后重试。";
+    readonly catalogComplete: "已加载全部可用插件。";
     readonly viewRepository: "查看仓库";
     readonly close: "收起";
     readonly noDescription: "该仓库没有提供说明。";
