@@ -58,6 +58,19 @@ $DSH_HOME/config/dsh-plugin-installer.json
 
 如果没有设置 `DSH_HOME`，则使用 DSH 默认目录。保存空值可以清除本插件保存的 Token。无人值守安装场景也可以使用服务端环境变量 `GITHUB_TOKEN`；当插件没有保存 Token 时，它会作为 fallback 使用。
 
+### Windows 本地 MITM 与 TLS 证书错误
+
+如果使用 FastGitHub、steamcommunity_302 等本地 HTTPS 加速器或代理时，插件市场无法连接 GitHub，并提示无法验证 GitHub 的 TLS 证书，通常是因为代理根证书虽然已被 Windows 信任，但 Node.js 尚未使用 Windows 系统证书存储。复现环境和验证过的解决方式记录在 [Issue #1](https://github.com/Toukaiteio/dsh-plugin-installer/issues/1)；感谢 [alphaqwqwq](https://github.com/alphaqwqwq) 报告并验证了这个问题。
+
+请先完全退出 DSH，再在同一个 Windows CMD 窗口中设置 Node.js 使用系统 CA，然后重新启动 DSH：
+
+```bat
+set "NODE_OPTIONS=%NODE_OPTIONS% --use-system-ca"
+dsh web
+```
+
+该选项需要 Node.js 22 或更高版本，并且加速器根证书仍须正确安装并被 Windows 信任。不要使用 `NODE_TLS_REJECT_UNAUTHORIZED=0` 绕过证书校验。
+
 如需指定其他 Profile 或不自动启动 DSH Web，请先下载脚本后再传入参数：
 
 ```powershell

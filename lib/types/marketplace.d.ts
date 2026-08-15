@@ -65,8 +65,12 @@ export interface ProfileSummary {
 export declare class UserFacingError extends Error {
     readonly code: string;
     readonly status: number;
-    constructor(code: string, message: string, status?: number);
+    readonly hint?: string | undefined;
+    readonly command?: string | undefined;
+    constructor(code: string, message: string, status?: number, hint?: string | undefined, command?: string | undefined);
 }
+/** Convert Node/undici connection failures into safe, actionable API errors. */
+export declare function githubConnectionError(error: unknown): UserFacingError;
 export declare function isMarketplacePluginRepository(owner: string, repository: string): boolean;
 export declare function isProfileName(value: unknown): value is string;
 export declare function isRepositorySegment(value: unknown): value is string;

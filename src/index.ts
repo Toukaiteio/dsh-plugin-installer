@@ -15,6 +15,7 @@ import {
   type PluginCandidate,
   type ProfileSummary,
   UserFacingError,
+  githubConnectionError,
   githubInstallSpec,
   githubReleaseArchives,
   isMarketplacePluginRepository,
@@ -155,7 +156,14 @@ class MarketplaceRuntime {
     } catch (error) {
       const known = error instanceof UserFacingError ? error : new UserFacingError('internal', '操作未完成，请稍后重试。', 500)
       if (!(error instanceof UserFacingError)) this.ctx.logger.warn(error instanceof Error ? error : new Error(String(error)))
-      this.json(response, known.status, { error: { code: known.code, message: known.message } })
+      this.json(response, known.status, {
+        error: {
+          code: known.code,
+          message: known.message,
+          ...(known.hint === undefined ? {} : { hint: known.hint }),
+          ...(known.command === undefined ? {} : { command: known.command }),
+        },
+      })
     }
   }
 
@@ -510,8 +518,9 @@ class MarketplaceRuntime {
     let response: Response
     try {
       response = await fetch(`https://api.github.com${path}`, { headers, signal: AbortSignal.timeout(15_000) })
-    } catch {
-      throw new UserFacingError('github-unavailable', '无法连接 GitHub，请检查网络后重试。', 502)
+    } catch (error) {
+      this.ctx.logger.warn(error instanceof Error ? error : new Error(String(error)))
+      throw githubConnectionError(error)
     }
     if (!response.ok) {
       if (response.status === 404) {
@@ -611,7 +620,10 @@ class MarketplaceRuntime {
     if (cached !== undefined && cached.expiresAt > Date.now()) return await cached.value
     const value = this.githubJson<unknown>(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repository)}/releases?per_page=20`)
       .then(releases => githubReleaseArchives(packageName, releases))
-      .catch(() => [])
+      .catch(error => {
+        if (error instanceof UserFacingError && error.code === 'github-tls-certificate') throw error
+        return []
+      })
     this.releaseCache.set(key, { value, expiresAt: Date.now() + 5 * 60_000 })
     return await value
   }
@@ -622,7 +634,10 @@ class MarketplaceRuntime {
     if (cached !== undefined && cached.expiresAt > Date.now()) return await cached.value
     const value = this.githubJson<Array<{ sha?: unknown }>>(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repository)}/commits?per_page=1`)
       .then(commits => typeof commits[0]?.sha === 'string' && /^[0-9a-f]{7,64}$/i.test(commits[0].sha) ? commits[0].sha : null)
-      .catch(() => null)
+      .catch(error => {
+        if (error instanceof UserFacingError && error.code === 'github-tls-certificate') throw error
+        return null
+      })
     this.commitCache.set(key, { value, expiresAt: Date.now() + 5 * 60_000 })
     return await value
   }
@@ -651,8 +666,9 @@ class MarketplaceRuntime {
     let response: Response
     try {
       response = await fetch(release.downloadUrl, { headers: { 'User-Agent': 'dsh-plugin-installer' }, signal: AbortSignal.timeout(60_000) })
-    } catch {
-      throw new UserFacingError('release-unavailable', '无法下载 GitHub Release 安装包，请检查网络后重试。', 502)
+    } catch (error) {
+      this.ctx.logger.warn(error instanceof Error ? error : new Error(String(error)))
+      throw githubConnectionError(error)
     }
     if (!response.ok) throw new UserFacingError('release-unavailable', `GitHub Release 安装包下载失败（${response.status}）。`, 502)
     const length = Number(response.headers.get('content-length'))

@@ -71,9 +71,60 @@ export interface ProfileSummary {
 }
 
 export class UserFacingError extends Error {
-  constructor(readonly code: string, message: string, readonly status = 400) {
+  constructor(
+    readonly code: string,
+    message: string,
+    readonly status = 400,
+    readonly hint?: string,
+    readonly command?: string,
+  ) {
     super(message)
   }
+}
+
+const TLS_CERTIFICATE_CODES = new Set([
+  'CERT_UNTRUSTED',
+  'DEPTH_ZERO_SELF_SIGNED_CERT',
+  'SELF_SIGNED_CERT_IN_CHAIN',
+  'UNABLE_TO_GET_ISSUER_CERT',
+  'UNABLE_TO_GET_ISSUER_CERT_LOCALLY',
+  'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+])
+
+const NETWORK_TIMEOUT_CODES = new Set([
+  'ETIMEDOUT',
+  'UND_ERR_CONNECT_TIMEOUT',
+  'UND_ERR_HEADERS_TIMEOUT',
+])
+
+/** Convert Node/undici connection failures into safe, actionable API errors. */
+export function githubConnectionError(error: unknown): UserFacingError {
+  if (errorChainHas(error, value => typeof value.code === 'string' && TLS_CERTIFICATE_CODES.has(value.code))) {
+    return new UserFacingError(
+      'github-tls-certificate',
+      '无法验证 GitHub 的 TLS 证书。',
+      502,
+      '若使用 FastGitHub、steamcommunity_302 等本地 HTTPS 加速器或代理，请完全退出 DSH 后，在 Windows CMD 中重新启动：',
+      'set "NODE_OPTIONS=%NODE_OPTIONS% --use-system-ca" && npx @deepseek-ai/dsh web',
+    )
+  }
+  if (errorChainHas(error, value => value.name === 'TimeoutError' || (typeof value.code === 'string' && NETWORK_TIMEOUT_CODES.has(value.code)))) {
+    return new UserFacingError('github-timeout', '连接 GitHub 超时，请检查网络、代理或防火墙后重试。', 504)
+  }
+  return new UserFacingError('github-unavailable', '无法连接 GitHub，请检查网络、代理或防火墙后重试。', 502)
+}
+
+function errorChainHas(error: unknown, predicate: (value: { readonly code?: unknown; readonly name?: unknown }) => boolean): boolean {
+  const seen = new Set<object>()
+  let current = error
+  while (current !== null && typeof current === 'object') {
+    if (seen.has(current)) return false
+    seen.add(current)
+    const value = current as { readonly code?: unknown; readonly name?: unknown; readonly cause?: unknown }
+    if (predicate(value)) return true
+    current = value.cause
+  }
+  return false
 }
 
 /** DeepSeek Harness itself is a host application, not a marketplace plugin. */

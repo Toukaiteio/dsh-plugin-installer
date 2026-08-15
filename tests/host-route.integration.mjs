@@ -112,6 +112,15 @@ try {
   if (harnessInspection.status !== 400 || harnessInspection.body.error?.code !== 'not-a-plugin') {
     throw new Error(`DeepSeek Harness should be rejected as a marketplace plugin: ${JSON.stringify(harnessInspection.body)}`)
   }
+
+  globalThis.fetch = async () => {
+    const certificateError = Object.assign(new Error('unable to verify the first certificate'), { code: 'UNABLE_TO_VERIFY_LEAF_SIGNATURE' })
+    throw Object.assign(new TypeError('fetch failed'), { cause: certificateError })
+  }
+  const tlsFailure = await requestJson(ctx.webServer.port, '/dsh-plugin-installer/api/plugins?query=tls-error&sort=updated&order=desc&page=1')
+  if (tlsFailure.status !== 502 || tlsFailure.body.error?.code !== 'github-tls-certificate' || tlsFailure.body.error?.command !== 'set "NODE_OPTIONS=%NODE_OPTIONS% --use-system-ca" && npx @deepseek-ai/dsh web') {
+    throw new Error(`TLS recovery guidance was missing: ${JSON.stringify(tlsFailure.body)}`)
+  }
   console.log('host route integration passed')
 } finally {
   await ctx.fiber.dispose()

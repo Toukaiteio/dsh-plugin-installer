@@ -220,8 +220,29 @@
 }
 
 .error {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
   background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 9%, transparent);
   color: var(--dsw-alias-state-error-primary);
+}
+
+.errorHint { color: var(--dsw-alias-label-secondary); }
+
+.errorCommand {
+  display: block;
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow-wrap: anywhere;
+  border: 1px solid color-mix(in srgb, var(--dsw-alias-state-error-primary) 24%, transparent);
+  border-radius: 4px;
+  padding: 4px 6px;
+  background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 6%, transparent);
+  color: inherit;
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 18px;
+  white-space: pre-wrap;
 }
 
 .success {

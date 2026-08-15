@@ -74,10 +74,17 @@ interface InstalledPlugin {
 
 interface PluginActionResult { readonly restartAvailable: boolean }
 
-interface ApiError { readonly error?: { readonly code?: string; readonly message?: string } }
+interface ApiError {
+  readonly error?: {
+    readonly code?: string
+    readonly message?: string
+    readonly hint?: string
+    readonly command?: string
+  }
+}
 
 class MarketplaceRequestError extends Error {
-  constructor(readonly code: string | undefined, message: string) {
+  constructor(readonly code: string | undefined, message: string, readonly hint?: string, readonly command?: string) {
     super(message)
   }
 }
@@ -89,8 +96,20 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
     credentials: 'same-origin',
   })
   const body = await response.json() as T & ApiError
-  if (!response.ok) throw new MarketplaceRequestError(body.error?.code, body.error?.message ?? `Request failed (${response.status})`)
+  if (!response.ok) throw new MarketplaceRequestError(body.error?.code, body.error?.message ?? `Request failed (${response.status})`, body.error?.hint, body.error?.command)
   return body
+}
+
+interface Message {
+  readonly kind: 'error' | 'success'
+  readonly text: string
+  readonly hint?: string
+  readonly command?: string
+}
+
+function errorMessage(error: unknown, fallback: string): Omit<Message, 'kind'> {
+  if (error instanceof MarketplaceRequestError) return { text: error.message, hint: error.hint, command: error.command }
+  return { text: error instanceof Error ? error.message : fallback }
 }
 
 function updated(value: string, locale: string): string {
@@ -176,7 +195,7 @@ export function PluginMarketplaceSettingsTab({ t }: SettingsProps): ReactNode {
   const [hasMore, setHasMore] = useState(false)
   const [loadMoreFailed, setLoadMoreFailed] = useState(false)
   const [action, setAction] = useState<string | null>(null)
-  const [message, setMessage] = useState<{ kind: 'error' | 'success'; text: string } | null>(null)
+  const [message, setMessage] = useState<Message | null>(null)
   const [restartAvailable, setRestartAvailable] = useState(false)
   const [newProfile, setNewProfile] = useState('')
   const [sortBy, setSortBy] = useState<CatalogSortKey>('updated')
@@ -220,7 +239,7 @@ export function PluginMarketplaceSettingsTab({ t }: SettingsProps): ReactNode {
       setCatalogPage(page)
       setHasMore(catalog.hasMore)
     } catch (error) {
-      setMessage({ kind: 'error', text: error instanceof Error ? error.message : t('loadFailed') })
+      setMessage({ kind: 'error', ...errorMessage(error, t('loadFailed')) })
       if (page > 1) {
         setHasMore(false)
         setLoadMoreFailed(true)
@@ -281,7 +300,7 @@ export function PluginMarketplaceSettingsTab({ t }: SettingsProps): ReactNode {
       setGithubToken('')
       setMessage({ kind: 'success', text: t('githubTokenSaved') })
     } catch (error) {
-      setMessage({ kind: 'error', text: error instanceof Error ? error.message : t('githubTokenSaveFailed') })
+      setMessage({ kind: 'error', ...errorMessage(error, t('githubTokenSaveFailed')) })
     } finally {
       setAction(null)
     }
@@ -312,7 +331,7 @@ export function PluginMarketplaceSettingsTab({ t }: SettingsProps): ReactNode {
         setMessage(null)
         setSourceConsent(current => ({ ...current, [repository.fullName]: true }))
       } else {
-        setMessage({ kind: 'error', text })
+        setMessage({ kind: 'error', ...errorMessage(error, text) })
       }
     } finally {
       setAction(null)
@@ -339,7 +358,7 @@ export function PluginMarketplaceSettingsTab({ t }: SettingsProps): ReactNode {
       if (error instanceof MarketplaceRequestError && error.code === 'build-approval-required') {
         setSourceConsent(current => ({ ...current, [repository.fullName]: true }))
       } else {
-        setMessage({ kind: 'error', text: error instanceof Error ? error.message : t('installFailed') })
+        setMessage({ kind: 'error', ...errorMessage(error, t('installFailed')) })
       }
     } finally {
       setAction(null)
@@ -361,7 +380,7 @@ export function PluginMarketplaceSettingsTab({ t }: SettingsProps): ReactNode {
       const result = await api<{ url: string }>('/switch', { method: 'POST', body: JSON.stringify({ profile: selectedProfile }) })
       window.location.assign(result.url)
     } catch (error) {
-      setMessage({ kind: 'error', text: error instanceof Error ? error.message : t('profileFailed') })
+      setMessage({ kind: 'error', ...errorMessage(error, t('profileFailed')) })
       setAction(null)
     }
   }
@@ -374,7 +393,7 @@ export function PluginMarketplaceSettingsTab({ t }: SettingsProps): ReactNode {
       const result = await api<{ url: string }>('/profiles', { method: 'POST', body: JSON.stringify({ name: newProfile.trim() }) })
       window.location.assign(result.url)
     } catch (error) {
-      setMessage({ kind: 'error', text: error instanceof Error ? error.message : t('profileFailed') })
+      setMessage({ kind: 'error', ...errorMessage(error, t('profileFailed')) })
       setAction(null)
     }
   }
@@ -386,7 +405,7 @@ export function PluginMarketplaceSettingsTab({ t }: SettingsProps): ReactNode {
       const result = await api<{ url: string }>('/restart', { method: 'POST', body: JSON.stringify({ profile: selectedProfile }) })
       window.location.assign(result.url)
     } catch (error) {
-      setMessage({ kind: 'error', text: error instanceof Error ? error.message : t('profileFailed') })
+      setMessage({ kind: 'error', ...errorMessage(error, t('profileFailed')) })
       setAction(null)
     }
   }
@@ -406,7 +425,7 @@ export function PluginMarketplaceSettingsTab({ t }: SettingsProps): ReactNode {
       setMessage({ kind: 'success', text: t('updatedPlugin') })
       setRestartAvailable(result.restartAvailable)
     } catch (error) {
-      setMessage({ kind: 'error', text: error instanceof Error ? error.message : t('updateFailed') })
+      setMessage({ kind: 'error', ...errorMessage(error, t('updateFailed')) })
     } finally {
       setAction(null)
     }
@@ -428,7 +447,7 @@ export function PluginMarketplaceSettingsTab({ t }: SettingsProps): ReactNode {
       setMessage({ kind: 'success', text: t('removedPlugin') })
       setRestartAvailable(result.restartAvailable)
     } catch (error) {
-      setMessage({ kind: 'error', text: error instanceof Error ? error.message : t('removeFailed') })
+      setMessage({ kind: 'error', ...errorMessage(error, t('removeFailed')) })
     } finally {
       setAction(null)
     }
@@ -528,7 +547,13 @@ export function PluginMarketplaceSettingsTab({ t }: SettingsProps): ReactNode {
         </div>
       </details>
 
-      {message !== null ? <p className={message.kind === 'error' ? css.error : css.success} role={message.kind === 'error' ? 'alert' : 'status'}>{message.text}</p> : null}
+      {message !== null ? (
+        <div className={message.kind === 'error' ? css.error : css.success} role={message.kind === 'error' ? 'alert' : 'status'}>
+          <span>{message.text}</span>
+          {message.hint === undefined ? null : <span className={css.errorHint}>{message.hint}</span>}
+          {message.command === undefined ? null : <code className={css.errorCommand}>{message.command}</code>}
+        </div>
+      ) : null}
       {message?.kind === 'success' ? (
         restartAvailable
           ? <button type="button" className={css.primaryButton} disabled={isWorking} onClick={() => void restartDsh()}>{actionIs('restart') ? t('restarting') : t('restartNow')}</button>

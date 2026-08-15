@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { githubInstallSpec, githubReleaseArchive, githubReleaseArchives, isMarketplacePluginRepository, isPackageEntryPath, isProfileName, isReleaseTag, normalizeCatalogQuery, parseDshBundleManifest, sortCatalog } from '../src/marketplace.js'
+import { githubConnectionError, githubInstallSpec, githubReleaseArchive, githubReleaseArchives, isMarketplacePluginRepository, isPackageEntryPath, isProfileName, isReleaseTag, normalizeCatalogQuery, parseDshBundleManifest, sortCatalog } from '../src/marketplace.js'
 
 describe('DSH bundle manifest validation', () => {
   it('accepts a distributable DSH bundle and reports its install script', () => {
@@ -120,5 +120,24 @@ describe('catalog sorting', () => {
     ]
     expect(sortCatalog(tied, 'stars', 'desc').map(entry => entry.fullName)).toEqual(['alpha/plugin', 'zeta/plugin'])
     expect(sortCatalog(tied, 'updated', 'asc').map(entry => entry.fullName)).toEqual(['alpha/plugin', 'zeta/plugin'])
+  })
+})
+
+describe('GitHub connection errors', () => {
+  it('gives a Windows system-CA restart command for nested TLS certificate failures', () => {
+    const certificateError = Object.assign(new Error('unable to verify the first certificate'), { code: 'UNABLE_TO_VERIFY_LEAF_SIGNATURE' })
+    const error = githubConnectionError(Object.assign(new TypeError('fetch failed'), { cause: certificateError }))
+
+    expect(error).toMatchObject({
+      code: 'github-tls-certificate',
+      status: 502,
+      message: '无法验证 GitHub 的 TLS 证书。',
+      command: 'set "NODE_OPTIONS=%NODE_OPTIONS% --use-system-ca" && npx @deepseek-ai/dsh web',
+    })
+  })
+
+  it('keeps timeouts distinct from certificate failures', () => {
+    const error = githubConnectionError(Object.assign(new Error('connect timeout'), { code: 'UND_ERR_CONNECT_TIMEOUT' }))
+    expect(error).toMatchObject({ code: 'github-timeout', status: 504 })
   })
 })

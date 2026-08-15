@@ -58,6 +58,19 @@ $DSH_HOME/config/dsh-plugin-installer.json
 
 If `DSH_HOME` is not set, DSH's default home directory is used. Saving an empty value clears the token saved by this plugin. For unattended installation, the server-side `GITHUB_TOKEN` environment variable is also supported and is used when no plugin-saved token is present.
 
+### Windows local MITM and TLS certificate errors
+
+If the marketplace cannot reach GitHub with a local HTTPS accelerator or proxy such as FastGitHub or steamcommunity_302, and the UI reports that GitHub's TLS certificate could not be verified, the proxy's root CA may be trusted by Windows but not by Node.js. This is documented and reproduced in [Issue #1](https://github.com/Toukaiteio/dsh-plugin-installer/issues/1); thanks to [alphaqwqwq](https://github.com/alphaqwqwq) for reporting and validating it.
+
+Fully exit DSH, then set Node.js to use the Windows system CA before starting DSH again in the same Windows CMD window:
+
+```bat
+set "NODE_OPTIONS=%NODE_OPTIONS% --use-system-ca"
+dsh web
+```
+
+The option requires Node.js 22 or newer, and the accelerator's root certificate must still be installed and trusted in Windows. Do not use `NODE_TLS_REJECT_UNAUTHORIZED=0` to bypass certificate verification.
+
 For another Profile or to prevent DSH Web from starting, download the script first so its parameters can be passed explicitly:
 
 ```powershell
