@@ -75,6 +75,12 @@ export declare const zh: {
     readonly updating: "正在更新…";
     readonly updatedPlugin: "插件已更新。重启 DSH 后生效。";
     readonly updateFailed: "插件更新未完成。";
+    readonly selfUpdateAvailable: "插件市场有可用更新";
+    readonly selfUpdateHint: "点击“立即更新”安装最新稳定版，完成后重启 DSH 生效。";
+    readonly selfUpdateNow: "立即更新";
+    readonly selfUpdating: "正在更新插件市场…";
+    readonly selfUpdated: "插件市场已更新。重启 DSH 后生效。";
+    readonly selfUpdateFailed: "插件市场更新未完成。";
     readonly remove: "删除";
     readonly removing: "正在删除…";
     readonly removeConfirm: "确定要删除这个插件吗？删除后需重启 DSH 才会生效。";

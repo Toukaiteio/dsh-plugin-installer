@@ -51,6 +51,15 @@ export interface GitHubReleaseArchive {
 
 export type PluginUpdateStatus = 'available' | 'up-to-date' | 'unknown'
 
+/** Update availability of the marketplace plugin itself, reported to the Web UI. */
+export interface SelfUpdateStatus {
+  readonly repository: string | null
+  readonly currentVersion: string
+  readonly latestVersion: string | null
+  readonly latestTag: string | null
+  readonly updateStatus: PluginUpdateStatus
+}
+
 /** A direct, GitHub-backed DSH bundle installed in one Profile. */
 export interface InstalledPlugin {
   readonly packageName: string
@@ -217,6 +226,32 @@ export function githubReleaseArchives(packageName: string, value: unknown): GitH
 
 export function isReleaseTag(value: string): boolean {
   return /^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(value)
+}
+
+/**
+ * Compare two dot-separated versions numerically, ignoring a leading `v` and
+ * build metadata. A prerelease sorts below the release it belongs to, so a
+ * checkout ahead of the latest stable Release is not offered a downgrade.
+ */
+export function compareVersions(left: string, right: string): number {
+  const parsedLeft = parseVersion(left)
+  const parsedRight = parseVersion(right)
+  const length = Math.max(parsedLeft.core.length, parsedRight.core.length)
+  for (let index = 0; index < length; index += 1) {
+    const compared = (parsedLeft.core[index] ?? 0) - (parsedRight.core[index] ?? 0)
+    if (compared !== 0) return compared
+  }
+  if (parsedLeft.prerelease === null) return parsedRight.prerelease === null ? 0 : 1
+  if (parsedRight.prerelease === null) return -1
+  return parsedLeft.prerelease.localeCompare(parsedRight.prerelease)
+}
+
+function parseVersion(value: string): { core: number[]; prerelease: string | null } {
+  const [main, ...suffix] = value.trim().replace(/^v/, '').split('+')[0]!.split('-')
+  return {
+    core: main!.split('.').map(part => /^\d+$/.test(part) ? Number(part) : 0),
+    prerelease: suffix.length > 0 ? suffix.join('-') : null,
+  }
 }
 
 function isHttpsUrl(value: string): boolean {

@@ -378,6 +378,43 @@
   color: var(--dsw-alias-state-business-primary);
 }
 
+/* Self-update notice for the marketplace plugin itself. */
+.selfUpdate {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border: 1px solid color-mix(in srgb, var(--dsw-alias-state-business-primary) 24%, transparent);
+  border-radius: 7px;
+  padding: 9px 11px;
+  background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 9%, transparent);
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.selfUpdateMain {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.selfUpdateLabel { flex: 1; min-width: 0; }
+
+.selfUpdateVersions { font-weight: 600; white-space: nowrap; }
+
+.selfUpdate .primaryButton {
+  min-height: 30px;
+  padding: 5px 12px;
+  font-size: 12px;
+}
+
+.selfUpdateHint {
+  margin: 0;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+  line-height: 18px;
+}
+
 .installedHint {
   margin: 0 0 4px;
   color: var(--dsw-alias-label-tertiary);
@@ -497,6 +534,7 @@
   .profileBar { flex-wrap: wrap; }
   .search { flex-wrap: wrap; }
   .search input { flex-basis: 100%; }
+  .selfUpdateMain { flex-wrap: wrap; }
   .newProfile { margin-left: 0; }
   .row { gap: 8px; }
   .rowActions { flex-wrap: wrap; justify-content: flex-end; }

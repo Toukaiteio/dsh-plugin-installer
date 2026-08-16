@@ -1,5 +1,5 @@
 import { request } from 'node:http'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -18,6 +18,7 @@ const previousHome = process.env.DSH_HOME
 const previousGithubToken = process.env.GITHUB_TOKEN
 const originalFetch = globalThis.fetch
 const searchCalls = []
+let selfReleaseVersion = '999.0.0'
 process.env.DSH_HOME = root
 delete process.env.GITHUB_TOKEN
 globalThis.fetch = async (input, init) => {
@@ -29,6 +30,12 @@ globalThis.fetch = async (input, init) => {
   }
   if (url.origin === 'https://api.github.com' && /\/repos\/example\/example-plugin\/(releases|commits)$/.test(url.pathname)) {
     return Response.json([])
+  }
+  if (url.origin === 'https://api.github.com' && url.pathname === '/repos/toukaiteio/dsh-plugin-installer/releases') {
+    return Response.json([{
+      tag_name: `v${selfReleaseVersion}`,
+      assets: [{ name: `dsh-plugin-installer-${selfReleaseVersion}.tgz`, browser_download_url: `https://github.com/Toukaiteio/dsh-plugin-installer/releases/download/v${selfReleaseVersion}/dsh-plugin-installer-${selfReleaseVersion}.tgz` }],
+    }])
   }
   return await originalFetch(input, init)
 }
@@ -57,6 +64,12 @@ try {
   if (!summary.installedRepositories.includes('example/example-plugin')) throw new Error('Installed GitHub repository was not discovered')
   const plugin = summary.installedPlugins.find(installed => installed.packageName === 'example-plugin')
   if (plugin?.updateStatus !== 'unknown') throw new Error('A failed remote check should not report a false update status')
+
+  const packageVersion = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version
+  const expectedSelfUpdate = { repository: 'toukaiteio/dsh-plugin-installer', currentVersion: packageVersion, latestVersion: '999.0.0', latestTag: 'v999.0.0', updateStatus: 'available' }
+  if (JSON.stringify(state.selfUpdate) !== JSON.stringify(expectedSelfUpdate)) {
+    throw new Error(`Unexpected self-update status: ${JSON.stringify(state.selfUpdate)}`)
+  }
 
   const configBefore = await requestJson(ctx.webServer.port, '/dsh-plugin-installer/api/config')
   if (configBefore.status !== 200 || configBefore.body.configured !== false || configBefore.body.source !== 'none') {
@@ -111,6 +124,34 @@ try {
   const harnessInspection = await requestJson(ctx.webServer.port, '/dsh-plugin-installer/api/plugin/deepseek-ai/deepseek-harness')
   if (harnessInspection.status !== 400 || harnessInspection.body.error?.code !== 'not-a-plugin') {
     throw new Error(`DeepSeek Harness should be rejected as a marketplace plugin: ${JSON.stringify(harnessInspection.body)}`)
+  }
+
+  // A dedicated runtime with only an older self Release available must refuse
+  // the one-click self-update before any installer command can run.
+  selfReleaseVersion = '0.0.1'
+  const selfUpdateRoot = mkdtempSync(join(tmpdir(), 'dsh-plugin-installer-selfupdate-'))
+  const selfUpdateProfile = join(selfUpdateRoot, 'profiles', 'web')
+  mkdirSync(selfUpdateProfile, { recursive: true })
+  writeFileSync(join(selfUpdateProfile, 'package.json'), JSON.stringify({ dependencies: {}, dsh: { profile: { bundles: ['@deepseek-ai/dsh-web-app'] } } }))
+  const selfUpdateHome = process.env.DSH_HOME
+  process.env.DSH_HOME = selfUpdateRoot
+  const selfUpdateCtx = new Context()
+  selfUpdateCtx.baseUrl = pathToFileURL(selfUpdateProfile).href + '/'
+  try {
+    await selfUpdateCtx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
+    apply(selfUpdateCtx)
+    const refused = await requestJson(selfUpdateCtx.webServer.port, '/dsh-plugin-installer/api/self-update', {
+      method: 'POST',
+      body: '{}',
+      headers: { 'content-type': 'application/json' },
+    })
+    if (refused.status !== 409 || refused.body.error?.code !== 'self-update-unavailable') {
+      throw new Error(`A non-newer Release should refuse the self-update: ${JSON.stringify(refused.body)}`)
+    }
+  } finally {
+    await selfUpdateCtx.fiber.dispose()
+    process.env.DSH_HOME = selfUpdateHome
+    rmSync(selfUpdateRoot, { recursive: true, force: true })
   }
 
   globalThis.fetch = async () => {

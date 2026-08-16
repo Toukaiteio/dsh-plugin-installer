@@ -23,6 +23,7 @@ DSH Plugin Installer 会在官方 Web UI 的 **设置 → 插件** 中增加“�
 - 安装到选中的 DSH Profile。
 - 通过 GitHub 依赖地址和包的 repository 元数据识别“已安装”状态。
 - 自动检查 GitHub Release 版本更新，并提供页面内更新与删除操作。
+- 打开插件市场时检查安装器自身的新版本 Release，提供一键更新当前 Profile 并重启生效；旧版本在重启前继续运行，其他 Profile 不受影响。
 - 文案和日期格式自动跟随官方 DSH 的语言偏好。
 - 列出 Web Profile，快速打开其他 Profile，也可以创建新的 Web Profile。
 - 安装到当前 Profile 后提示重启，并提供一键重启按钮。

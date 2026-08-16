@@ -45,6 +45,14 @@ export interface GitHubReleaseArchive {
     readonly prerelease: boolean;
 }
 export type PluginUpdateStatus = 'available' | 'up-to-date' | 'unknown';
+/** Update availability of the marketplace plugin itself, reported to the Web UI. */
+export interface SelfUpdateStatus {
+    readonly repository: string | null;
+    readonly currentVersion: string;
+    readonly latestVersion: string | null;
+    readonly latestTag: string | null;
+    readonly updateStatus: PluginUpdateStatus;
+}
 /** A direct, GitHub-backed DSH bundle installed in one Profile. */
 export interface InstalledPlugin {
     readonly packageName: string;
@@ -85,6 +93,12 @@ export declare function githubReleaseArchive(packageName: string, value: unknown
 /** Preserve GitHub's release order while retaining only installable package archives. */
 export declare function githubReleaseArchives(packageName: string, value: unknown): GitHubReleaseArchive[];
 export declare function isReleaseTag(value: string): boolean;
+/**
+ * Compare two dot-separated versions numerically, ignoring a leading `v` and
+ * build metadata. A prerelease sorts below the release it belongs to, so a
+ * checkout ahead of the latest stable Release is not offered a downgrade.
+ */
+export declare function compareVersions(left: string, right: string): number;
 /** Accept only a package-relative JavaScript entry that can be checked in GitHub Contents. */
 export declare function isPackageEntryPath(value: string): boolean;
 /** Normalize a catalog query so clients and the host share the same cache key. */

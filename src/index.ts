@@ -14,7 +14,9 @@ import {
   type InstalledPlugin,
   type PluginCandidate,
   type ProfileSummary,
+  type SelfUpdateStatus,
   UserFacingError,
+  compareVersions,
   githubConnectionError,
   githubInstallSpec,
   githubReleaseArchives,
@@ -46,7 +48,11 @@ const CATALOG_CACHE_MAX_ENTRIES = 48
 const MAX_RELEASE_ARCHIVE_BYTES = 32 * 1024 * 1024
 const SELF_MANIFEST = JSON.parse(readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8')) as {
   name: string
+  version: string
+  repository?: unknown
 }
+/** The marketplace's own repository, so a fork still checks its own Releases. */
+const SELF_REPOSITORY = githubRepositoryFromMetadata(SELF_MANIFEST.repository)
 
 interface ProfilePackage {
   dependencies?: Record<string, string>
@@ -94,6 +100,14 @@ interface CatalogSearchResult {
 
 interface CommandResult { readonly output: string }
 
+/** Result of the one-click self-update; the running process keeps serving old code until restart. */
+interface SelfUpdateResult {
+  readonly currentVersion: string
+  readonly installedVersion: string | null
+  readonly output: string
+  readonly restartAvailable: boolean
+}
+
 /** Web host half: GitHub discovery, explicit permission gates and profile launch. */
 export function apply(ctx: Context): void {
   const runtime = new MarketplaceRuntime(ctx)
@@ -113,6 +127,7 @@ class MarketplaceRuntime {
   private readonly searchCache = new Map<string, { expiresAt: number; value: CatalogSearchResult }>()
   private readonly releaseCache = new Map<string, { expiresAt: number; value: Promise<readonly GitHubReleaseArchive[]> }>()
   private readonly commitCache = new Map<string, { expiresAt: number; value: Promise<string | null> }>()
+  private selfUpdateInFlight = false
 
   constructor(private readonly ctx: Context) {
     this.dshHome = this.resolveDshHome()
@@ -148,6 +163,7 @@ class MarketplaceRuntime {
       if (request.method === 'POST' && tail === '/config') return this.json(response, 200, this.configureGithubToken(body))
       if (request.method === 'POST' && tail === '/install') return this.json(response, 200, await this.install(body))
       if (request.method === 'POST' && tail === '/update') return this.json(response, 200, await this.update(body))
+      if (request.method === 'POST' && tail === '/self-update') return this.json(response, 200, await this.updateSelf())
       if (request.method === 'POST' && tail === '/remove') return this.json(response, 200, await this.remove(body))
       if (request.method === 'POST' && tail === '/switch') return this.json(response, 200, await this.switchProfile(body))
       if (request.method === 'POST' && tail === '/restart') return this.json(response, 200, await this.restartCurrentProfile(body))
@@ -167,8 +183,8 @@ class MarketplaceRuntime {
     }
   }
 
-  private async state(): Promise<{ currentProfile: string; profiles: ProfileSummary[] }> {
-    return { currentProfile: this.currentProfile, profiles: await this.listProfiles() }
+  private async state(): Promise<{ currentProfile: string; profiles: ProfileSummary[]; selfUpdate: SelfUpdateStatus }> {
+    return { currentProfile: this.currentProfile, profiles: await this.listProfiles(), selfUpdate: await this.selfUpdate() }
   }
 
   private async listProfiles(): Promise<ProfileSummary[]> {
@@ -612,6 +628,72 @@ class MarketplaceRuntime {
     const latestCommit = await this.latestCommit(plugin.owner, plugin.repositoryName)
     if (latestCommit === null) return plugin
     return { ...plugin, updateStatus: sameCommit(plugin.installedCommit, latestCommit) ? 'up-to-date' : 'available' }
+  }
+
+  /**
+   * Compare the running marketplace version with its own latest GitHub Release.
+   * Shares the release cache with plugin checks; a checkout already ahead of
+   * the published Release stays `up-to-date` instead of being downgraded.
+   */
+  private async selfUpdate(): Promise<SelfUpdateStatus> {
+    const unknown = (latestVersion: string | null): SelfUpdateStatus => ({
+      repository: SELF_REPOSITORY,
+      currentVersion: SELF_MANIFEST.version,
+      latestVersion,
+      latestTag: null,
+      updateStatus: 'unknown',
+    })
+    if (SELF_REPOSITORY === null) return unknown(null)
+    const [owner, repositoryName] = SELF_REPOSITORY.split('/')
+    if (owner === undefined || repositoryName === undefined) return unknown(null)
+    const releases = await this.releaseArchives(owner, repositoryName, SELF_MANIFEST.name)
+    const latest = releases.find(item => !item.prerelease) ?? releases[0]
+    if (latest === undefined || latest.version === null) return unknown(null)
+    return {
+      repository: SELF_REPOSITORY,
+      currentVersion: SELF_MANIFEST.version,
+      latestVersion: latest.version,
+      latestTag: latest.tag,
+      updateStatus: compareVersions(latest.version, SELF_MANIFEST.version) > 0 ? 'available' : 'up-to-date',
+    }
+  }
+
+  /**
+   * Replace the running marketplace with its own latest stable Release.
+   * The request body is ignored on purpose: repository, profile and release
+   * are all derived server-side, so this endpoint can never install anything
+   * but a strictly newer build of this plugin into the profile it runs from.
+   * The install only rewrites profile files; the running process keeps
+   * serving the old code until the user accepts the offered profile restart.
+   */
+  private async updateSelf(): Promise<SelfUpdateResult> {
+    if (this.selfUpdateInFlight) throw new UserFacingError('self-update-in-progress', '插件市场正在更新中。', 409)
+    const status = await this.selfUpdate()
+    if (status.repository === null || status.updateStatus !== 'available' || status.latestVersion === null || status.latestTag === null) {
+      throw new UserFacingError('self-update-unavailable', '插件市场没有可安装的更新。', 409)
+    }
+    const [owner, repositoryName] = status.repository.split('/')
+    if (owner === undefined || repositoryName === undefined) {
+      throw new UserFacingError('self-update-unavailable', '插件市场没有可安装的更新。', 409)
+    }
+    this.selfUpdateInFlight = true
+    try {
+      // Pin the exact Release the check verified as newer, never `main`.
+      const candidate = await this.inspect(owner, repositoryName, status.latestTag)
+      if (!candidate.validBundle || candidate.installSpec === null || candidate.packageName !== SELF_MANIFEST.name
+        || candidate.version === null || compareVersions(candidate.version, SELF_MANIFEST.version) <= 0) {
+        throw new UserFacingError('self-update-unavailable', '插件市场仓库当前不能作为可更新的 DSH bundle 安装。', 409)
+      }
+      const result = await this.runDsh(['plugin', '--profile', this.currentProfile, 'add', await this.resolveInstallSpec(candidate)])
+      return {
+        currentVersion: SELF_MANIFEST.version,
+        installedVersion: candidate.version,
+        output: result.output,
+        restartAvailable: this.profileSupportsWeb(this.currentProfile),
+      }
+    } finally {
+      this.selfUpdateInFlight = false
+    }
   }
 
   private async releaseArchives(owner: string, repository: string, packageName: string): Promise<readonly GitHubReleaseArchive[]> {

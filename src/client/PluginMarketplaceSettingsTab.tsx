@@ -16,6 +16,22 @@ interface Profile {
 interface StateSnapshot {
   readonly currentProfile: string
   readonly profiles: readonly Profile[]
+  /** Absent when an older backend does not report the marketplace's own version. */
+  readonly selfUpdate?: SelfUpdateStatus | null
+}
+
+interface SelfUpdateStatus {
+  readonly repository: string | null
+  readonly currentVersion: string
+  readonly latestVersion: string | null
+  readonly latestTag: string | null
+  readonly updateStatus: 'available' | 'up-to-date' | 'unknown'
+}
+
+interface SelfUpdateResult {
+  readonly currentVersion: string
+  readonly installedVersion: string | null
+  readonly restartAvailable: boolean
 }
 
 interface GithubConfig {
@@ -197,6 +213,7 @@ export function PluginMarketplaceSettingsTab({ t }: SettingsProps): ReactNode {
   const [action, setAction] = useState<string | null>(null)
   const [message, setMessage] = useState<Message | null>(null)
   const [restartAvailable, setRestartAvailable] = useState(false)
+  const [selfUpdateDone, setSelfUpdateDone] = useState(false)
   const [newProfile, setNewProfile] = useState('')
   const [sortBy, setSortBy] = useState<CatalogSortKey>('updated')
   const [sortDirection, setSortDirection] = useState<CatalogSortDirection>('desc')
@@ -265,6 +282,7 @@ export function PluginMarketplaceSettingsTab({ t }: SettingsProps): ReactNode {
 
   const profiles = snapshot?.profiles ?? []
   const selectedSummary = profiles.find(profile => profile.name === selectedProfile)
+  const selfUpdate = snapshot?.selfUpdate ?? null
   const visiblePlugins = useMemo(() => sortCatalog(plugins, sortBy, sortDirection), [plugins, sortBy, sortDirection])
   const updatableCount = selectedSummary?.installedPlugins.filter(plugin => plugin.updateStatus === 'available').length ?? 0
 
@@ -410,6 +428,24 @@ export function PluginMarketplaceSettingsTab({ t }: SettingsProps): ReactNode {
     }
   }
 
+  const updateSelf = async (): Promise<void> => {
+    if (action !== null) return
+    setAction('self-update')
+    setMessage(null)
+    setRestartAvailable(false)
+    try {
+      const result = await api<SelfUpdateResult>('/self-update', { method: 'POST', body: JSON.stringify({}) })
+      setSelfUpdateDone(true)
+      await load(query, true)
+      setMessage({ kind: 'success', text: t('selfUpdated') })
+      setRestartAvailable(result.restartAvailable)
+    } catch (error) {
+      setMessage({ kind: 'error', ...errorMessage(error, t('selfUpdateFailed')) })
+    } finally {
+      setAction(null)
+    }
+  }
+
   const updatePlugin = async (plugin: InstalledPlugin): Promise<void> => {
     const actionKey = `update:${plugin.packageName}`
     if (action !== null) return
@@ -475,6 +511,21 @@ export function PluginMarketplaceSettingsTab({ t }: SettingsProps): ReactNode {
         </label>
         <button type="button" className={css.secondaryButton} disabled={isWorking || newProfile.trim().length === 0} onClick={() => void createProfile()}>{actionIs('create-profile') ? t('creatingProfile') : t('createAndOpen')}</button>
       </section>
+
+      {selfUpdate?.updateStatus === 'available' && selfUpdate.latestVersion !== null && !selfUpdateDone ? (
+        <div className={css.selfUpdate} role="status">
+          <div className={css.selfUpdateMain}>
+            <span className={css.selfUpdateLabel}>
+              {t('selfUpdateAvailable')}
+              <span className={css.selfUpdateVersions}> v{selfUpdate.currentVersion} → v{selfUpdate.latestVersion}</span>
+            </span>
+            <button type="button" className={css.primaryButton} disabled={isWorking} onClick={() => void updateSelf()}>
+              {actionIs('self-update') ? t('selfUpdating') : t('selfUpdateNow')}
+            </button>
+          </div>
+          <p className={css.selfUpdateHint}>{t('selfUpdateHint')}</p>
+        </div>
+      ) : null}
 
       <form className={css.search} onSubmit={event => { event.preventDefault(); void load(query, false, true) }}>
         <input value={query} type="search" placeholder={t('search')} aria-label={t('search')} onChange={event => setQuery(event.currentTarget.value)} />

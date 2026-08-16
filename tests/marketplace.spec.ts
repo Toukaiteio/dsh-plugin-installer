@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { githubConnectionError, githubInstallSpec, githubReleaseArchive, githubReleaseArchives, isMarketplacePluginRepository, isPackageEntryPath, isProfileName, isReleaseTag, normalizeCatalogQuery, parseDshBundleManifest, sortCatalog } from '../src/marketplace.js'
+import { compareVersions, githubConnectionError, githubInstallSpec, githubReleaseArchive, githubReleaseArchives, isMarketplacePluginRepository, isPackageEntryPath, isProfileName, isReleaseTag, normalizeCatalogQuery, parseDshBundleManifest, sortCatalog } from '../src/marketplace.js'
 
 describe('DSH bundle manifest validation', () => {
   it('accepts a distributable DSH bundle and reports its install script', () => {
@@ -84,6 +84,25 @@ describe('input constraints', () => {
   it('normalizes catalog queries before using them as cache keys', () => {
     expect(normalizeCatalogQuery('  dsh\n\tplugin  ')).toBe('dsh plugin')
     expect(normalizeCatalogQuery('x'.repeat(121))).toHaveLength(120)
+  })
+})
+
+describe('version comparison', () => {
+  it('compares dot-separated versions numerically', () => {
+    expect(compareVersions('0.1.9', '0.1.13')).toBeLessThan(0)
+    expect(compareVersions('0.2.0', '0.1.99')).toBeGreaterThan(0)
+    expect(compareVersions('1.0.0', '1.0.0')).toBe(0)
+    expect(compareVersions('1.0', '1.0.0')).toBe(0)
+  })
+
+  it('ignores a leading v and build metadata', () => {
+    expect(compareVersions('v0.1.13', '0.1.13+build.1')).toBe(0)
+    expect(compareVersions('v1.2.3', '1.2.4')).toBeLessThan(0)
+  })
+
+  it('treats a prerelease as older than the matching release', () => {
+    expect(compareVersions('1.0.0-rc.1', '1.0.0')).toBeLessThan(0)
+    expect(compareVersions('1.0.0-rc.1', '1.0.0-rc.2')).toBeLessThan(0)
   })
 })
 

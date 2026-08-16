@@ -23,6 +23,7 @@ The project intentionally keeps the interface compact and newcomer-friendly. It 
 - Installation into a selected DSH Profile.
 - Installed-state detection from both GitHub dependency specs and package repository metadata.
 - Automatic update checks for GitHub Release versions, plus in-page update and removal actions.
+- Self-update check for the marketplace plugin itself, with a one-click update of the active profile and a restart action to apply it. The old build keeps serving until restart and other profiles are untouched.
 - Interface copy and date formatting that follow the official DSH language preference.
 - Web Profile list, fast Profile opening, and Web Profile creation.
 - Restart guidance and a one-click restart action after installing into the active Profile.

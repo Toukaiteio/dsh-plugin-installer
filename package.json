@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-installer",
-  "version": "0.1.13",
+  "version": "0.2.0",
   "description": "A Web UI marketplace and profile switcher for DeepSeek Harness plugins.",
   "repository": {
     "type": "git",
